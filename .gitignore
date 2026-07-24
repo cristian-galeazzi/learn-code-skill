@@ -1,0 +1,19 @@
+# personal learner state, never publish
+.claude/
+state.db
+growth-map.md
+*.db
+
+# tooling / scratch
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+**/.DS_Store
+
+# internal design docs and SDD scratch, not shipped to users
+docs/
+.superpowers/
+
+# project working notes for Claude, local only
+CLAUDE.md
