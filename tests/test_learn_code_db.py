@@ -197,3 +197,55 @@ def test_link_is_bidirectional_and_deduplicated(tmp_path):
         ("sql.aggregation/group-by", "same idea")]
     assert lc.links_for(conn, "sql.aggregation/group-by") == [
         ("python.pandas/groupby", "same idea")]
+
+
+def _seed_topic(db, topic_id="t", area="python", n_solid=0, n_shaky=0, passes=0):
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", topic_id, area])
+    conn = sqlite3.connect(db)
+    for i in range(n_solid):
+        conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,"
+                     "last_seen,cold_passes) VALUES (?,?,?,'solid','x','x',?)",
+                     (f"{topic_id}/s{i}", topic_id, f"s{i}", passes))
+    for i in range(n_shaky):
+        conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,"
+                     "last_seen) VALUES (?,?,?,'shaky','x','x')",
+                     (f"{topic_id}/k{i}", topic_id, f"k{i}"))
+    conn.commit()
+    conn.close()
+
+
+def test_support_level_drops_as_mastery_holds(tmp_path):
+    db = str(tmp_path / "state.db")
+    _seed_topic(db, n_solid=0, n_shaky=4)
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    assert lc.support_level(conn, "t")[0] == 3
+    conn.close()
+
+    db2 = str(tmp_path / "state2.db")
+    _seed_topic(db2, n_solid=9, n_shaky=1, passes=2)
+    conn2 = sqlite3.connect(db2)
+    lc.init_db(conn2)
+    assert lc.support_level(conn2, "t")[0] == 0
+
+
+def test_support_floor_is_never_undercut(tmp_path):
+    db = str(tmp_path / "state.db")
+    _seed_topic(db, n_solid=9, n_shaky=1, passes=2)
+    assert lc.main(["--db", db, "support-floor", "t", "2"]) == 0
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    assert lc.support_level(conn, "t")[0] == 2  # floor wins over the computed 0
+    conn.close()
+    assert lc.main(["--db", db, "support-floor", "t", "clear"]) == 0
+    conn = sqlite3.connect(db)
+    assert lc.support_level(conn, "t")[0] == 0
+
+
+def test_unknown_topic_defaults_to_full_support(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    assert lc.support_level(conn, "never.seen")[0] == 3

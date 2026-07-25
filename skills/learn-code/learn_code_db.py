@@ -84,7 +84,22 @@ def connect(override: str | None) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path(override))
     conn.execute("PRAGMA foreign_keys = ON")
     init_db(conn)  # schema is CREATE IF NOT EXISTS, so a fresh DB never needs `init`
+    migrate(conn)  # older personal DBs predate support_floor
     return conn
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    """Add columns missing from DBs created by an earlier version.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> migrate(conn)
+    >>> migrate(conn)  # idempotent
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(topics)")}
+    if "support_floor" not in cols:
+        conn.execute("ALTER TABLE topics ADD COLUMN support_floor INTEGER")
+    conn.commit()
 
 
 def init_db(conn: sqlite3.Connection) -> None:
@@ -97,6 +112,7 @@ def init_db(conn: sqlite3.Connection) -> None:
     """
     conn.executescript(SCHEMA)
     conn.commit()
+    migrate(conn)
 
 
 def record_topic(conn: sqlite3.Connection, topic_id: str, area: str) -> None:
@@ -140,7 +156,7 @@ def cold_result(conn: sqlite3.Connection, concept_id: str, passed: bool) -> str:
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
-    >>> _ = conn.execute("INSERT INTO topics VALUES ('t','a','x','x')")
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','a','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts "
     ...     "(id, topic_id, label, state, intro_session, last_seen) "
     ...     "VALUES ('t/c','t','c','shaky','x','x')")
@@ -174,7 +190,7 @@ def end_session(conn: sqlite3.Connection, topics_seen: str) -> None:
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
-    >>> _ = conn.execute("INSERT INTO topics VALUES ('t','a','x','x')")
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','a','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts "
     ...     "(id, topic_id, label, state, intro_session, last_seen) "
     ...     "VALUES ('t/c','t','c','learning','x','x')")
@@ -193,7 +209,7 @@ def warmup(conn: sqlite3.Connection, limit: int = 2) -> list[tuple[str, str]]:
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
-    >>> _ = conn.execute("INSERT INTO topics VALUES ('t','python','x','x')")
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','python','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts "
     ...     "(id, topic_id, label, state, intro_session, last_seen, cold_fails) "
     ...     "VALUES ('t/c','t','c','shaky','x','x',1)")
@@ -282,7 +298,7 @@ def add_link(conn: sqlite3.Connection, a_id: str, b_id: str, note: str) -> None:
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
-    >>> _ = conn.execute("INSERT INTO topics VALUES ('t','python','x','x')")
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','python','x','x')")
     >>> for cid in ("t/a", "t/b"):
     ...     _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,"
     ...         "intro_session,last_seen) VALUES (?,'t','l','learning','x','x')", (cid,))
@@ -319,7 +335,7 @@ def topic_mastery(conn: sqlite3.Connection) -> list[tuple[str, str, float]]:
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
-    >>> _ = conn.execute("INSERT INTO topics VALUES ('t','python','x','x')")
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','python','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,last_seen) VALUES ('t/a','t','a','solid','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,last_seen) VALUES ('t/b','t','b','shaky','x','x')")
     >>> conn.commit()
@@ -339,12 +355,62 @@ def topic_mastery(conn: sqlite3.Connection) -> list[tuple[str, str, float]]:
     return out
 
 
+def set_support_floor(conn: sqlite3.Connection, topic_id: str,
+                      level: int | None) -> None:
+    """Pin a minimum scaffolding level for a topic (None clears it).
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) "
+    ...     "VALUES ('t','python','x','x')")
+    >>> set_support_floor(conn, "t", 2)
+    >>> conn.execute("SELECT support_floor FROM topics WHERE id='t'").fetchone()[0]
+    2
+    """
+    conn.execute("UPDATE topics SET support_floor=?, updated_at=? WHERE id=?",
+                 (level, now(), topic_id))
+    conn.commit()
+
+
+def support_level(conn: sqlite3.Connection, topic_id: str) -> tuple[int, str]:
+    """Return (scaffolding level 0-3, one-line reason). 3 is maximum support.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> support_level(conn, "unknown.topic")
+    (3, 'new topic')
+    """
+    row = conn.execute(
+        "SELECT SUM(CASE state WHEN 'solid' THEN 1 ELSE 0 END), COUNT(*), "
+        "       SUM(CASE WHEN state='solid' AND cold_passes>=2 THEN 1 ELSE 0 END) "
+        "FROM concepts WHERE topic_id=?", (topic_id,)).fetchone()
+    solid, total, deep = (row[0] or 0), (row[1] or 0), (row[2] or 0)
+    if total == 0:
+        computed, reason = 3, "new topic"
+    else:
+        pct = solid / total
+        if pct < 0.25:
+            computed, reason = 3, f"{solid}/{total} solid"
+        elif pct < 0.55:
+            computed, reason = 2, f"{solid}/{total} solid"
+        elif pct < 0.8 or deep == 0:
+            computed, reason = 1, f"{solid}/{total} solid, {deep} deeply recalled"
+        else:
+            computed, reason = 0, f"{solid}/{total} solid, {deep} deeply recalled"
+    floor_row = conn.execute("SELECT support_floor FROM topics WHERE id=?",
+                             (topic_id,)).fetchone()
+    floor = floor_row[0] if floor_row else None
+    if floor is not None and floor > computed:
+        return floor, f"floor set by user (computed {computed}: {reason})"
+    return computed, reason
+
+
 def render_bars(conn: sqlite3.Connection, width: int = 20) -> str:
     """Render an ASCII mastery bar chart grouped by area then topic.
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
-    >>> _ = conn.execute("INSERT INTO topics VALUES ('t','python','x','x')")
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','python','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,last_seen) VALUES ('t/abc','t','a','solid','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,last_seen) VALUES ('t/def','t','b','shaky','x','x')")
     >>> conn.commit()
@@ -442,6 +508,11 @@ def main(argv: list[str]) -> int:
     p_link.add_argument("note")
     p_links = sub.add_parser("links")
     p_links.add_argument("concept_id")
+    p_sup = sub.add_parser("support-level")
+    p_sup.add_argument("topic_id")
+    p_floor = sub.add_parser("support-floor")
+    p_floor.add_argument("topic_id")
+    p_floor.add_argument("level", choices=["0", "1", "2", "3", "clear"])
     sub.add_parser("bars")
     sub.add_parser("render-map")
     args = parser.parse_args(argv)
@@ -481,6 +552,14 @@ def main(argv: list[str]) -> int:
         if args.cmd == "links":
             for other, note in links_for(conn, args.concept_id):
                 print(f"{other}\t{note}")
+            return 0
+        if args.cmd == "support-level":
+            level, reason = support_level(conn, args.topic_id)
+            print(f"{level}\t{reason}")
+            return 0
+        if args.cmd == "support-floor":
+            set_support_floor(conn, args.topic_id,
+                              None if args.level == "clear" else int(args.level))
             return 0
         if args.cmd == "bars":
             print(render_bars(conn)); return 0
