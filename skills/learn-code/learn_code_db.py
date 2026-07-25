@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 DEFAULT_DB = Path.home() / ".claude" / "learn-code" / "state.db"
@@ -442,7 +442,35 @@ def brief(conn: sqlite3.Connection, topic_id: str | None = None,
             "SELECT topic_id, label FROM to_deepen WHERE done=0"
             f"{deepen_where} ORDER BY created_at", params):
         lines.append(f"DEEPEN\t{tid}\t{label}")
+    for tid, solid, bridges in challenge_candidates(conn):
+        if topic_id is None or tid == topic_id:
+            lines.append(f"CHALLENGE\t{tid}\t{solid}\t{bridges}")
     return "\n".join(lines) if lines else "EMPTY"
+
+
+def challenge_candidates(conn: sqlite3.Connection, min_days: int = 10,
+                         min_solid: int = 2) -> list[tuple[str, int, int]]:
+    """Return (topic_id, solid_count, bridge_count) for topics ripe for a hard problem.
+
+    A topic is ripe when enough concepts are solid and none of them was cold
+    recalled recently, so the knowledge has survived storage rather than being
+    fresh in working memory.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> challenge_candidates(conn)
+    []
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=min_days)).isoformat()
+    rows = conn.execute(
+        "SELECT c.topic_id, COUNT(*), "
+        "  (SELECT COUNT(*) FROM links l JOIN concepts x ON x.id IN (l.a_id, l.b_id) "
+        "   WHERE x.topic_id = c.topic_id) "
+        "FROM concepts c WHERE c.state='solid' "
+        "GROUP BY c.topic_id "
+        "HAVING COUNT(*) >= ? AND MAX(COALESCE(c.last_cold, c.last_seen)) < ? "
+        "ORDER BY 3 DESC, 2 DESC, 1 ASC", (min_solid, cutoff)).fetchall()
+    return [(r[0], r[1], r[2]) for r in rows]
 
 
 def render_bars(conn: sqlite3.Connection, width: int = 20) -> str:
@@ -556,6 +584,9 @@ def main(argv: list[str]) -> int:
     p_brief = sub.add_parser("brief")
     p_brief.add_argument("--topic", default=None)
     p_brief.add_argument("--limit", type=int, default=2)
+    p_chal = sub.add_parser("challenge")
+    p_chal.add_argument("--days", type=int, default=10)
+    p_chal.add_argument("--min-solid", type=int, default=2)
     sub.add_parser("bars")
     sub.add_parser("render-map")
     args = parser.parse_args(argv)
@@ -606,6 +637,11 @@ def main(argv: list[str]) -> int:
             return 0
         if args.cmd == "brief":
             print(brief(conn, args.topic, args.limit))
+            return 0
+        if args.cmd == "challenge":
+            for tid, solid, bridges in challenge_candidates(
+                    conn, args.days, args.min_solid):
+                print(f"{tid}\t{solid}\t{bridges}")
             return 0
         if args.cmd == "bars":
             print(render_bars(conn)); return 0

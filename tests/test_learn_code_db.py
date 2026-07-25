@@ -305,3 +305,50 @@ def test_brief_topic_filter_excludes_other_topics_deepen(tmp_path):
     lc.init_db(conn)
     out = lc.brief(conn, "topic.a")
     assert "DEEPEN" not in out
+
+
+def test_challenge_needs_solid_concepts_that_are_not_fresh(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "stale", "python"])
+    lc.main(["--db", db, "record-topic", "fresh", "python"])
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    recent = datetime.now(timezone.utc).isoformat()
+    conn = sqlite3.connect(db)
+    for tid, ts in (("stale", old), ("fresh", recent)):
+        for i in range(2):
+            conn.execute(
+                "INSERT INTO concepts (id,topic_id,label,state,intro_session,"
+                "last_seen,last_cold,cold_passes) "
+                "VALUES (?,?,?,'solid','x',?,?,1)",
+                (f"{tid}/c{i}", tid, f"c{i}", ts, ts))
+    conn.commit()
+    lc.init_db(conn)
+    got = lc.challenge_candidates(conn, min_days=10)
+    assert [row[0] for row in got] == ["stale"]
+
+
+def test_challenge_ranks_bridged_topics_first(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    conn = sqlite3.connect(db)
+    # three topics: "aaa" sorts first but has no bridges, "bridged" is linked to "other"
+    for tid in ("aaa", "bridged", "other"):
+        conn.execute("INSERT INTO topics (id,area,created_at,updated_at) "
+                     "VALUES (?,'python','x','x')", (tid,))
+        for i in range(2):
+            conn.execute(
+                "INSERT INTO concepts (id,topic_id,label,state,intro_session,"
+                "last_seen,last_cold,cold_passes) "
+                "VALUES (?,?,?,'solid','x',?,?,1)",
+                (f"{tid}/c{i}", tid, f"c{i}", old, old))
+    conn.commit()
+    lc.init_db(conn)
+    lc.add_link(conn, "bridged/c0", "other/c0", "related")
+    lc.add_link(conn, "bridged/c1", "other/c1", "also related")
+    got = lc.challenge_candidates(conn, min_days=10)
+    assert [row[0] for row in got] == ["bridged", "other", "aaa"]
+    assert dict((r[0], r[2]) for r in got) == {"bridged": 2, "other": 2, "aaa": 0}
