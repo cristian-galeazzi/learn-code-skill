@@ -161,12 +161,12 @@ The skill stores your progress locally. Use these commands to check your mastery
 
 | Command | Purpose |
 |---------|---------|
-| `brief [--topic T]` | Everything the tutor should know before teaching: support level, warm-up targets, open misconceptions, bridges, deepen queue, challenge-ready topics |
-| `support-level T` | Current scaffolding level for a topic, 0 (autonomous) to 3 (full support) |
-| `support-floor T 0..3\|clear` | Pin a minimum support level, the guarantee that help is never taken away against the learner's will |
-| `link A B "why"` | Record a bridge between two concepts in different areas |
-| `links C` | Show every bridge touching a concept |
-| `challenge [--days N]` | Topics stable long enough to deserve a complex integrating problem |
+| `brief [--topic TOPIC_ID] [--limit N]` | Everything the tutor should know before teaching: support level, warm-up targets, open misconceptions, bridges, deepen queue, challenge-ready topics (defaults: --limit 2) |
+| `support-level TOPIC_ID` | Current scaffolding level for a topic, 0 (autonomous) to 3 (full support) |
+| `support-floor TOPIC_ID 0\|1\|2\|3\|clear` | Pin a minimum support level, the guarantee that help is never taken away against the learner's will |
+| `link A_CONCEPT B_CONCEPT "why"` | Record a bridge between two concepts in different areas |
+| `links CONCEPT_ID` | Show every bridge touching a concept |
+| `challenge [--days N] [--min-solid N]` | Topics stable long enough to deserve a complex integrating problem (defaults: --days 10, --min-solid 2) |
 
 ## Requirements
 
