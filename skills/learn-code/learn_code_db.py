@@ -367,8 +367,10 @@ def set_support_floor(conn: sqlite3.Connection, topic_id: str,
     >>> conn.execute("SELECT support_floor FROM topics WHERE id='t'").fetchone()[0]
     2
     """
-    conn.execute("UPDATE topics SET support_floor=?, updated_at=? WHERE id=?",
-                 (level, now(), topic_id))
+    cur = conn.execute("UPDATE topics SET support_floor=?, updated_at=? WHERE id=?",
+                       (level, now(), topic_id))
+    if cur.rowcount == 0:
+        raise KeyError(f"unknown topic: {topic_id}")
     conn.commit()
 
 
@@ -425,7 +427,7 @@ def brief(conn: sqlite3.Connection, topic_id: str | None = None,
     # topic can be the highest-risk one to revisit at session start.
     for cid, label in warmup(conn, warm_limit):
         lines.append(f"WARMUP\t{cid}\t{label}")
-    where = " AND c.topic_id=?" if topic_id else ""
+    where = " AND (m.concept_id IS NULL OR c.topic_id=?)" if topic_id else ""
     params = (topic_id,) if topic_id else ()
     for label, stumbles in conn.execute(
             "SELECT m.label, m.stumbles FROM misconceptions m "

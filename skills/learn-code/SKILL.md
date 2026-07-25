@@ -46,6 +46,10 @@ it right but say they guessed.
 
 ## The loop
 
+Overview and deep-dive only deliver the map of what exists; the loop below is
+what actually teaches. Every item from that map that needs real understanding
+runs through this cycle, one at a time.
+
 Every topic runs the same cycle. Never skip a stage, never run two at once.
 
 1. 🎯 **Prerequisites.** Name the concepts needed to understand what is coming.
@@ -82,8 +86,9 @@ current level, always read it before teaching a topic that already exists.
 | 0 | Autonomous: problem statement, review after, hints only if requested |
 
 - The level moves on its own, computed from the DB. Never announce it.
-- The direction is one way over time, down. It rises again only through a
-  genuine regression recorded by `cold-result ... fail`.
+- The level falls as concepts go solid and survive cold recall. It can also
+  rise when new ground opens inside a topic (more unlearned concepts pull the
+  ratio down); that is not a regression, only a cold-recall fail is.
 - **Support is never removed against the user's will.** If they ask for more
   help, in any wording ("spiegami meglio", "go slower", "give me the steps"),
   give it immediately and run
@@ -101,7 +106,8 @@ there, ordered by real-world frequency of use, not by difficulty. Each item: a
 3-5 line runnable example plus one line on practical use. Show expected output
 only when it isn't obvious. Say how many more exist and hand those over
 progressively, on request. When part of the topic is already covered, present
-only what is missing.
+only what is missing. This list is the map, not the teaching: any item that
+needs real understanding still goes through the loop, one concept at a time.
 
 The unifying mental model goes *after* the list, not before. No anti-patterns
 and no common-error catalog here, those belong to deep-dive. Cross-tool
@@ -117,7 +123,9 @@ parameters used in 90% of real cases. One main alternative, compared in a
 table. Whether it mutates or returns is always stated explicitly. All the edge
 cases. The exact exception text it raises when misused. Internals only when
 they explain the observable behavior. Deprecation or replacement history when
-it exists. Roughly 10-15 lines.
+it exists. Roughly 10-15 lines. This is the map of the command, not a stage-2
+teach; if the concept doesn't land, hand it to the loop for testing and
+verification.
 
 For a concept rather than a command, use a different shape: definition,
 minimal example, why it exists.
@@ -228,7 +236,10 @@ across areas whenever the bridge is real.
   `df.groupby` are the same split-apply-combine. A forced analogy costs more
   than it gives.
 - When a bridge is used and it lands, record it:
-  `link <concept_a> <concept_b> "<one line on why>"`.
+  `link <concept_a> <concept_b> "<one line on why>"`. Both concepts must
+  already be recorded (`record-topic` + `record-concept`) or `link` fails; if
+  the older side comes from an earlier session, its ids are in `brief`'s
+  BRIDGE/WARMUP lines and in the growth map.
 - Before teaching something new, check `links <concept_id>` on the nearest
   known concept. If a bridge exists, open with it: "you already know this from
   X" beats a cold start.
@@ -403,10 +414,12 @@ user asks for something harder or to check ripeness mid-session; it prints
   context; a free-text pass there is a real `cold-result <id> pass`.
 - On a stumble tied to a known trap: `misconception <label> --concept <id>`.
   When later demonstrated cleanly: `resolve-misconception <label>`.
-- On a real cross-area bridge that landed: `link <a> <b> "<why>"`.
+- On a real cross-area bridge that landed: `link <a> <b> "<why>"` (both sides
+  need `record-topic`/`record-concept` first).
 - On a "remember to deepen X": `to-deepen <topic_id> <label>`, closed later
   with `deepen-done <label>`.
-- When the user asks for more help: `support-floor <topic_id> <level>`.
+- When the user asks for more help: `support-floor <topic_id> <level>` (run
+  `record-topic` first if the topic isn't tracked yet, or it fails).
 
 **Session end:** run `end-session --topics <csv>`, then `render-map`.
 

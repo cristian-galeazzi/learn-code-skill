@@ -243,6 +243,19 @@ def test_support_floor_is_never_undercut(tmp_path):
     assert lc.support_level(conn, "t")[0] == 0
 
 
+def test_support_floor_on_unrecorded_topic_raises(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    conn = sqlite3.connect(db)
+    try:
+        lc.set_support_floor(conn, "never.recorded", 2)
+        assert False, "expected KeyError"
+    except KeyError:
+        pass
+    # CLI path maps it to a clean exit 1, no traceback
+    assert lc.main(["--db", db, "support-floor", "never.recorded", "2"]) == 1
+
+
 def test_unknown_topic_defaults_to_full_support(tmp_path):
     db = str(tmp_path / "state.db")
     lc.main(["--db", db, "init"])
@@ -293,6 +306,17 @@ def test_brief_includes_topic_with_no_concepts(tmp_path):
     lc.init_db(conn)
     out = lc.brief(conn)
     assert "SUPPORT\tpython.generators\t3\tnew topic" in out.split("\n")
+
+
+def test_brief_topic_scoped_includes_conceptless_misconception(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "python.dicts", "python"])
+    lc.main(["--db", db, "misconception", "general confusion"])  # no --concept
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    out = lc.brief(conn, "python.dicts")
+    assert "MISCONCEPTION\tgeneral confusion\t1" in out
 
 
 def test_brief_topic_filter_excludes_other_topics_deepen(tmp_path):
