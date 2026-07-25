@@ -249,3 +249,36 @@ def test_unknown_topic_defaults_to_full_support(tmp_path):
     conn = sqlite3.connect(db)
     lc.init_db(conn)
     assert lc.support_level(conn, "never.seen")[0] == 3
+
+
+def test_brief_reports_every_channel(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "python.dicts", "python"])
+    lc.main(["--db", db, "record-topic", "sql.joins", "sql"])
+    lc.main(["--db", db, "record-concept", "python.dicts/setdefault",
+             "python.dicts", "setdefault"])
+    lc.main(["--db", db, "record-concept", "sql.joins/hash-join",
+             "sql.joins", "hash join"])
+    lc.main(["--db", db, "end-session", "--topics", "python.dicts"])
+    lc.main(["--db", db, "misconception", "dict copy is deep",
+             "--concept", "python.dicts/setdefault"])
+    lc.main(["--db", db, "link", "python.dicts/setdefault",
+             "sql.joins/hash-join", "both are hash lookups"])
+    lc.main(["--db", db, "to-deepen", "python.dicts", "comprehensions"])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    out = lc.brief(conn, "python.dicts")
+    assert "SUPPORT\tpython.dicts\t3" in out
+    assert "WARMUP\tpython.dicts/setdefault\tsetdefault" in out
+    assert "MISCONCEPTION\tdict copy is deep\t1" in out
+    assert "BRIDGE\tpython.dicts/setdefault\tsql.joins/hash-join\t" in out
+    assert "DEEPEN\tpython.dicts\tcomprehensions" in out
+
+
+def test_brief_on_empty_db_is_a_single_marker(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    assert lc.brief(conn) == "EMPTY"

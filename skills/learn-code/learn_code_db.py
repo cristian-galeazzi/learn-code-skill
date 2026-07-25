@@ -405,6 +405,40 @@ def support_level(conn: sqlite3.Connection, topic_id: str) -> tuple[int, str]:
     return computed, reason
 
 
+def brief(conn: sqlite3.Connection, topic_id: str | None = None,
+          warm_limit: int = 2) -> str:
+    """Return everything the tutor should know before teaching, one tag per line.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> brief(conn)
+    'EMPTY'
+    """
+    lines: list[str] = []
+    topics = ([topic_id] if topic_id
+              else [t for _area, t, _pct in topic_mastery(conn)])
+    for tid in topics:
+        level, reason = support_level(conn, tid)
+        lines.append(f"SUPPORT\t{tid}\t{level}\t{reason}")
+    for cid, label in warmup(conn, warm_limit):
+        lines.append(f"WARMUP\t{cid}\t{label}")
+    where = " AND c.topic_id=?" if topic_id else ""
+    params = (topic_id,) if topic_id else ()
+    for label, stumbles in conn.execute(
+            "SELECT m.label, m.stumbles FROM misconceptions m "
+            "LEFT JOIN concepts c ON c.id = m.concept_id "
+            f"WHERE m.resolved=0{where} ORDER BY m.stumbles DESC", params):
+        lines.append(f"MISCONCEPTION\t{label}\t{stumbles}")
+    for a_id, b_id, note in conn.execute(
+            "SELECT a_id, b_id, note FROM links ORDER BY created_at"):
+        lines.append(f"BRIDGE\t{a_id}\t{b_id}\t{note}")
+    for tid, label in conn.execute(
+            "SELECT topic_id, label FROM to_deepen WHERE done=0 "
+            "ORDER BY created_at"):
+        lines.append(f"DEEPEN\t{tid}\t{label}")
+    return "\n".join(lines) if lines else "EMPTY"
+
+
 def render_bars(conn: sqlite3.Connection, width: int = 20) -> str:
     """Render an ASCII mastery bar chart grouped by area then topic.
 
@@ -513,6 +547,9 @@ def main(argv: list[str]) -> int:
     p_floor = sub.add_parser("support-floor")
     p_floor.add_argument("topic_id")
     p_floor.add_argument("level", choices=["0", "1", "2", "3", "clear"])
+    p_brief = sub.add_parser("brief")
+    p_brief.add_argument("--topic", default=None)
+    p_brief.add_argument("--limit", type=int, default=2)
     sub.add_parser("bars")
     sub.add_parser("render-map")
     args = parser.parse_args(argv)
@@ -560,6 +597,9 @@ def main(argv: list[str]) -> int:
         if args.cmd == "support-floor":
             set_support_floor(conn, args.topic_id,
                               None if args.level == "clear" else int(args.level))
+            return 0
+        if args.cmd == "brief":
+            print(brief(conn, args.topic, args.limit))
             return 0
         if args.cmd == "bars":
             print(render_bars(conn)); return 0
