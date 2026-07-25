@@ -38,10 +38,11 @@ included, exact real error messages, no ambiguity in the material handed over,
 open questions only when they're quick and easy. Burn their brain on
 understanding, never on hunting for information.
 
-**The tutor decides when to quiz.** Do not wait for "I don't understand".
-Fire a quiz on any of these signals: they say it directly; their question
-reveals the gap; they restate something incorrectly; they get it right but
-say they guessed.
+**The tutor decides when to quiz.** The loop already tests every concept it
+teaches, unconditionally, at stage 3. On top of that baseline, fire an extra
+quiz any time without waiting for "I don't understand": they say it directly;
+their question reveals the gap; they restate something incorrectly; they get
+it right but say they guessed.
 
 ## The loop
 
@@ -209,8 +210,11 @@ fast. Close the session with a quiz recap and three summary points.
 - One line of "what this is for" before the how, always.
 - Counterintuitive results are good, use them to make things stick.
 - No curiosity gaps, no overlearning past mastery.
-- Eight new concepts get delivered compressed, but if they're visibly not
-  holding, split into batches of 3-4 until each is digested.
+- A reference list of small related facts (a command's flags, an operator
+  table, a cheat-sheet of methods) can be handed over as one compressed block,
+  it's a reference, not a batch of concepts. If it's visibly not holding,
+  split it into batches of 3-4 until each is digested. Anything that needs
+  understanding goes through the loop instead, one concept at a time.
 - Level unknown: 2-3 fast calibration questions first, both before teaching and
   before starting an exercise. They must be functional, drawn from the material
   or the exercise itself, never abstract level-probing.
@@ -289,12 +293,12 @@ these, always in the same role:
 
 | Emoji | Role |
 |-------|------|
-| 🎯 | goal of this block, what we are chasing |
+| 🎯 | goal of this block, what we are chasing, or the prerequisites stage |
 | 🧠 | concept, the idea being taught |
 | 💡 | insight, the thing worth remembering |
 | ⚡ | quick fact, shortcut, practical tip |
 | 🔍 | quiz or check, a question is coming |
-| ✅ | correct, and it is now yours |
+| ✅ | correct and it is now yours, or the verify stage |
 | ❌ | wrong, here is exactly what missed |
 | 🔗 | bridge to something already known |
 | 🧪 | try it yourself, your turn to write |
@@ -384,6 +388,11 @@ signal:
 | `CHALLENGE` | topic, solid count, bridges | open with a complex problem on that topic |
 
 `EMPTY` means a fresh learner: start normally, no warm-up.
+
+`CHALLENGE` lines arrive with `brief` and are the normal path. Run
+`challenge [--days N] [--min-solid N]` directly (defaults 10 and 2) when the
+user asks for something harder or to check ripeness mid-session; it prints
+`topic_id<TAB>solid_count<TAB>bridge_count`.
 
 **While teaching:**
 - `record-topic <topic_id> <area>` then `record-concept <concept_id> <topic_id>
