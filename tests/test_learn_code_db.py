@@ -174,3 +174,26 @@ def test_render_map_via_cli_writes_next_to_the_db(tmp_path):
     lc.main(["--db", db, "init"])
     assert lc.main(["--db", db, "render-map"]) == 0
     assert (tmp_path / "growth-map.md").exists()
+
+
+def test_link_is_bidirectional_and_deduplicated(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "sql.aggregation", "sql"])
+    lc.main(["--db", db, "record-topic", "python.pandas", "python"])
+    lc.main(["--db", db, "record-concept", "sql.aggregation/group-by",
+             "sql.aggregation", "GROUP BY"])
+    lc.main(["--db", db, "record-concept", "python.pandas/groupby",
+             "python.pandas", "df.groupby"])
+    assert lc.main(["--db", db, "link", "sql.aggregation/group-by",
+                    "python.pandas/groupby", "same split-apply-combine idea"]) == 0
+    # reversed order is the same edge, not a second one
+    assert lc.main(["--db", db, "link", "python.pandas/groupby",
+                    "sql.aggregation/group-by", "same idea"]) == 0
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT COUNT(*) FROM links").fetchone()[0] == 1
+    lc.init_db(conn)
+    assert lc.links_for(conn, "python.pandas/groupby") == [
+        ("sql.aggregation/group-by", "same idea")]
+    assert lc.links_for(conn, "sql.aggregation/group-by") == [
+        ("python.pandas/groupby", "same idea")]

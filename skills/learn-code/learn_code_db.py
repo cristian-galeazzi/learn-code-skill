@@ -37,6 +37,12 @@ CREATE TABLE IF NOT EXISTS to_deepen (
     created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY, topics_seen TEXT);
+CREATE TABLE IF NOT EXISTS links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    a_id TEXT NOT NULL REFERENCES concepts(id),
+    b_id TEXT NOT NULL REFERENCES concepts(id),
+    note TEXT NOT NULL, created_at TEXT NOT NULL,
+    UNIQUE (a_id, b_id));
 """
 
 
@@ -271,6 +277,43 @@ def mark_deepen_done(conn: sqlite3.Connection, label: str) -> None:
     conn.commit()
 
 
+def add_link(conn: sqlite3.Connection, a_id: str, b_id: str, note: str) -> None:
+    """Link two concepts as the same underlying idea; direction does not matter.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> _ = conn.execute("INSERT INTO topics VALUES ('t','python','x','x')")
+    >>> for cid in ("t/a", "t/b"):
+    ...     _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,"
+    ...         "intro_session,last_seen) VALUES (?,'t','l','learning','x','x')", (cid,))
+    >>> add_link(conn, "t/b", "t/a", "same idea")
+    >>> links_for(conn, "t/a")
+    [('t/b', 'same idea')]
+    """
+    # store the pair sorted so (a,b) and (b,a) collide on the UNIQUE index
+    lo, hi = sorted((a_id, b_id))
+    conn.execute(
+        "INSERT INTO links (a_id, b_id, note, created_at) VALUES (?,?,?,?) "
+        "ON CONFLICT(a_id, b_id) DO UPDATE SET note=excluded.note",
+        (lo, hi, note, now()))
+    conn.commit()
+
+
+def links_for(conn: sqlite3.Connection, concept_id: str) -> list[tuple[str, str]]:
+    """Return (other_concept_id, note) for every bridge touching this concept.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> links_for(conn, "nothing/here")
+    []
+    """
+    rows = conn.execute(
+        "SELECT CASE WHEN a_id=? THEN b_id ELSE a_id END, note FROM links "
+        "WHERE a_id=? OR b_id=? ORDER BY created_at",
+        (concept_id, concept_id, concept_id)).fetchall()
+    return [(r[0], r[1]) for r in rows]
+
+
 def topic_mastery(conn: sqlite3.Connection) -> list[tuple[str, str, float]]:
     """Return (area, topic_id, mastery_pct) per topic; shaky counts half.
 
@@ -348,12 +391,17 @@ def render_map(conn: sqlite3.Connection, path: str | None) -> Path:
     mis = conn.execute(
         "SELECT label, stumbles FROM misconceptions WHERE resolved=0 "
         "ORDER BY stumbles DESC").fetchall()
+    bridges = conn.execute(
+        "SELECT a_id, b_id, note FROM links ORDER BY created_at").fetchall()
     parts = ["# learn-code growth map", "", "```", render_bars(conn), "```", ""]
     if deepen:
         parts += ["## To deepen", *[f"- {r[0]}" for r in deepen], ""]
     if mis:
         parts += ["## Open misconceptions",
                   *[f"- {r[0]} (x{r[1]})" for r in mis], ""]
+    if bridges:
+        parts += ["## Bridges",
+                  *[f"- {a} <-> {b}: {note}" for a, b, note in bridges], ""]
     # explicit utf-8: the bars are block glyphs, the locale encoding may not cover them
     target.write_text("\n".join(parts), encoding="utf-8")
     return target
@@ -389,6 +437,11 @@ def main(argv: list[str]) -> int:
     p_deep.add_argument("topic_id"); p_deep.add_argument("label")
     p_deep_done = sub.add_parser("deepen-done")
     p_deep_done.add_argument("label")
+    p_link = sub.add_parser("link")
+    p_link.add_argument("a_id"); p_link.add_argument("b_id")
+    p_link.add_argument("note")
+    p_links = sub.add_parser("links")
+    p_links.add_argument("concept_id")
     sub.add_parser("bars")
     sub.add_parser("render-map")
     args = parser.parse_args(argv)
@@ -422,6 +475,13 @@ def main(argv: list[str]) -> int:
             add_to_deepen(conn, args.topic_id, args.label); return 0
         if args.cmd == "deepen-done":
             mark_deepen_done(conn, args.label); return 0
+        if args.cmd == "link":
+            add_link(conn, args.a_id, args.b_id, args.note)
+            return 0
+        if args.cmd == "links":
+            for other, note in links_for(conn, args.concept_id):
+                print(f"{other}\t{note}")
+            return 0
         if args.cmd == "bars":
             print(render_bars(conn)); return 0
         if args.cmd == "render-map":
