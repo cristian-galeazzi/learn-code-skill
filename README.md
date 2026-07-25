@@ -99,6 +99,25 @@ SQL
 Your learning data is yours. It stays in `~/.claude/learn-code/`, never in this
 repository, never uploaded.
 
+### Fading support
+
+Help is not constant. Every topic carries a scaffolding level computed from the
+tracking DB, from 3 (full micro-steps and hints) down to 0 (problem statement
+and a review afterwards). It falls as concepts go solid and survive cold recall,
+which is the whole point: the skill is trying to make itself unnecessary.
+
+It never falls against your will. Ask for more help and the level is pinned
+where you want it until you say otherwise.
+
+### Bridges
+
+The brain keeps what it can attach to something it already holds. When two
+concepts from different areas turn out to be the same mechanism, SQL `GROUP BY`
+and pandas `groupby` for instance, the link is recorded and reused: the next
+time either side comes up, the lesson starts from what you already know. Your
+growth map shows the bridges, so the knowledge reads as one network instead of
+separate boxes.
+
 <details>
 <summary><strong>The silent review loop</strong></summary>
 
@@ -135,6 +154,19 @@ Then in Claude Code:
 ```
 
 That's it. The tracking database is created on first use.
+
+## Commands
+
+The skill stores your progress locally. Use these commands to check your mastery and adjust help levels:
+
+| Command | Purpose |
+|---------|---------|
+| `brief [--topic T]` | Everything the tutor should know before teaching: support level, warm-up targets, open misconceptions, bridges, deepen queue, challenge-ready topics |
+| `support-level T` | Current scaffolding level for a topic, 0 (autonomous) to 3 (full support) |
+| `support-floor T 0..3\|clear` | Pin a minimum support level, the guarantee that help is never taken away against the learner's will |
+| `link A B "why"` | Record a bridge between two concepts in different areas |
+| `links C` | Show every bridge touching a concept |
+| `challenge [--days N]` | Topics stable long enough to deserve a complex integrating problem |
 
 ## Requirements
 
