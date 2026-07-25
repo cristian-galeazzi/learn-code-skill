@@ -454,7 +454,8 @@ def challenge_candidates(conn: sqlite3.Connection, min_days: int = 10,
 
     A topic is ripe when enough concepts are solid and none of them was cold
     recalled recently, so the knowledge has survived storage rather than being
-    fresh in working memory.
+    fresh in working memory. bridge_count only counts links that cross into a
+    *different* topic, once per link: an intra-topic link bridges no areas.
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
@@ -464,8 +465,11 @@ def challenge_candidates(conn: sqlite3.Connection, min_days: int = 10,
     cutoff = (datetime.now(timezone.utc) - timedelta(days=min_days)).isoformat()
     rows = conn.execute(
         "SELECT c.topic_id, COUNT(*), "
-        "  (SELECT COUNT(*) FROM links l JOIN concepts x ON x.id IN (l.a_id, l.b_id) "
-        "   WHERE x.topic_id = c.topic_id) "
+        "  (SELECT COUNT(*) FROM links l "
+        "   JOIN concepts ca ON ca.id = l.a_id "
+        "   JOIN concepts cb ON cb.id = l.b_id "
+        "   WHERE ca.topic_id <> cb.topic_id "
+        "     AND (ca.topic_id = c.topic_id OR cb.topic_id = c.topic_id)) "
         "FROM concepts c WHERE c.state='solid' "
         "GROUP BY c.topic_id "
         "HAVING COUNT(*) >= ? AND MAX(COALESCE(c.last_cold, c.last_seen)) < ? "

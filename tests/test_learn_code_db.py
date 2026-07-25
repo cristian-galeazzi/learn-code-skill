@@ -352,3 +352,48 @@ def test_challenge_ranks_bridged_topics_first(tmp_path):
     got = lc.challenge_candidates(conn, min_days=10)
     assert [row[0] for row in got] == ["bridged", "other", "aaa"]
     assert dict((r[0], r[2]) for r in got) == {"bridged": 2, "other": 2, "aaa": 0}
+
+
+def _solid_topic(conn: sqlite3.Connection, tid: str, old: str) -> None:
+    conn.execute("INSERT INTO topics (id,area,created_at,updated_at) "
+                 "VALUES (?,'python','x','x')", (tid,))
+    for i in range(2):
+        conn.execute(
+            "INSERT INTO concepts (id,topic_id,label,state,intro_session,"
+            "last_seen,last_cold,cold_passes) "
+            "VALUES (?,?,?,'solid','x',?,?,1)",
+            (f"{tid}/c{i}", tid, f"c{i}", old, old))
+    conn.commit()
+
+
+def test_challenge_intra_topic_link_is_not_a_bridge(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    conn = sqlite3.connect(db)
+    for tid in ("solo", "bridged", "other"):
+        _solid_topic(conn, tid, old)
+    lc.init_db(conn)
+    lc.add_link(conn, "solo/c0", "solo/c1", "same topic, not a bridge")
+    lc.add_link(conn, "bridged/c0", "other/c0", "cross-topic bridge")
+    got = dict((r[0], r[2]) for r in lc.challenge_candidates(conn, min_days=10))
+    assert got["solo"] == 0
+    assert got["bridged"] == 1
+    ranked = [row[0] for row in lc.challenge_candidates(conn, min_days=10)]
+    assert ranked.index("bridged") < ranked.index("solo")
+
+
+def test_challenge_single_cross_topic_bridge_counts_once(tmp_path):
+    from datetime import datetime, timedelta, timezone
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    old = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    conn = sqlite3.connect(db)
+    for tid in ("bridged", "other"):
+        _solid_topic(conn, tid, old)
+    lc.init_db(conn)
+    lc.add_link(conn, "bridged/c0", "other/c0", "cross-topic bridge")
+    got = dict((r[0], r[2]) for r in lc.challenge_candidates(conn, min_days=10))
+    assert got["bridged"] == 1
+    assert got["other"] == 1
