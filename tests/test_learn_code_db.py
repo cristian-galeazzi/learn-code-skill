@@ -269,11 +269,12 @@ def test_brief_reports_every_channel(tmp_path):
     conn = sqlite3.connect(db)
     lc.init_db(conn)
     out = lc.brief(conn, "python.dicts")
-    assert "SUPPORT\tpython.dicts\t3" in out
+    lines = out.split("\n")
+    assert "SUPPORT\tpython.dicts\t3\t0/1 solid" in lines
     assert "WARMUP\tpython.dicts/setdefault\tsetdefault" in out
     assert "MISCONCEPTION\tdict copy is deep\t1" in out
     assert "BRIDGE\tpython.dicts/setdefault\tsql.joins/hash-join\t" in out
-    assert "DEEPEN\tpython.dicts\tcomprehensions" in out
+    assert "DEEPEN\tpython.dicts\tcomprehensions" in lines
 
 
 def test_brief_on_empty_db_is_a_single_marker(tmp_path):
@@ -282,3 +283,25 @@ def test_brief_on_empty_db_is_a_single_marker(tmp_path):
     conn = sqlite3.connect(db)
     lc.init_db(conn)
     assert lc.brief(conn) == "EMPTY"
+
+
+def test_brief_includes_topic_with_no_concepts(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "python.generators", "python"])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    out = lc.brief(conn)
+    assert "SUPPORT\tpython.generators\t3\tnew topic" in out.split("\n")
+
+
+def test_brief_topic_filter_excludes_other_topics_deepen(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "topic.a", "python"])
+    lc.main(["--db", db, "record-topic", "topic.b", "python"])
+    lc.main(["--db", db, "to-deepen", "topic.b", "b concept"])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    out = lc.brief(conn, "topic.a")
+    assert "DEEPEN" not in out
