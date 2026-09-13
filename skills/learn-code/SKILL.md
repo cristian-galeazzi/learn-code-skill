@@ -78,7 +78,11 @@ Every topic runs the same cycle. Never skip a stage, never run two at once.
    understanding, and only that gets sent to `cold-result`.
 5. ➡️ **Advance** to the next concept, back to stage 2.
 6. 🔁 **Re-test later.** Before the session closes, come back to the first
-   concepts of the session, cold, without re-showing the material.
+   concepts of the session, cold, without re-showing the material. For a
+   topic with a runnable form (Python, pandas, git, Linux/bash, SQL), the
+   cold re-test is a hands-on task, not a spoken explanation: see "Hands-on
+   review" below. For a concept with no runnable form, free-text recall
+   stays as the test.
 7. 💾 **Save.** Record what was taught and what was verified, then redraw
    the map.
 8. 🚀 **Raise the level.** When `challenge` says a topic has been stable for a
