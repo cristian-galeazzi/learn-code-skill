@@ -1,11 +1,26 @@
+import re
 import sqlite3
+import subprocess
+import sys
 import importlib.util
 from pathlib import Path
 
 SPEC = Path(__file__).resolve().parent.parent / "skills" / "learn-code" / "learn_code_db.py"
+SKILL_MD = SPEC.parent / "SKILL.md"
 _spec = importlib.util.spec_from_file_location("learn_code_db", SPEC)
 lc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lc)
+
+
+def _cli_subcommands() -> set[str]:
+    """Subcommand names argparse actually exposes, read from --help.
+
+    >>> "brief" in _cli_subcommands()
+    True
+    """
+    out = subprocess.run([sys.executable, str(SPEC), "--help"],
+                         capture_output=True, text=True, check=True).stdout
+    return set(re.search(r"\{([a-z0-9,\-]+)\}", out).group(1).split(","))
 
 
 def test_init_creates_tables_idempotently(tmp_path):
@@ -421,3 +436,23 @@ def test_challenge_single_cross_topic_bridge_counts_once(tmp_path):
     got = dict((r[0], r[2]) for r in lc.challenge_candidates(conn, min_days=10))
     assert got["bridged"] == 1
     assert got["other"] == 1
+
+
+def test_skill_doc_references_only_real_subcommands():
+    # SKILL.md telling the tutor to run a command the CLI does not expose is a
+    # runtime failure the tutor cannot recover from, so it is a test, not a review nit.
+    text = SKILL_MD.read_text()
+    spans = re.findall(r"`([^`]+)`", text)
+    referenced = {s.strip().split()[0] for s in spans if s.strip()}
+    hyphenated = {t for t in referenced
+                  if re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)+", t)}
+    assert hyphenated <= _cli_subcommands(), \
+        f"SKILL.md references non-existent subcommands: {hyphenated - _cli_subcommands()}"
+
+
+def test_every_subcommand_is_documented_in_skill_doc():
+    # The reverse drift: a command ships but the tutor never learns it exists.
+    text = SKILL_MD.read_text()
+    undocumented = {c for c in _cli_subcommands()
+                    if c != "init" and f"`{c}" not in text}
+    assert not undocumented, f"CLI subcommands missing from SKILL.md: {undocumented}"

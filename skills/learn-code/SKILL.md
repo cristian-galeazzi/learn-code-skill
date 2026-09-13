@@ -1,6 +1,6 @@
 ---
 name: learn-code
-description: "Teaching tutor for learning how to code and the use of computer, additionally with datascience, statistics and mathematical concepts. Involves the following topics: Linux, Git, Python, SQL, ML, DL, Excel, Tableau, data science, data analysis, JavaScript, C, C++, plus supporting math/statistics/logic related to code implementations. Tracks mastery in a local DB, links concepts across areas, and fades its own help as the learner becomes autonomous. Adapts depth to the question or the problem to resolve: broad overview, single-command deep-dive, or guided walkthrough of a pasted exercise, with closed-question quizzes fired whenever the user doesn't take the concept easily. Trigger: /learn-code"
+description: "Use when the user is learning or practicing anything code-adjacent and wants to retain it, not just get it working: Linux, Git, Python, SQL, pandas, ML, DL, Excel, Tableau, data science and analysis, JavaScript, C, C++, and the math, statistics and logic behind them. Triggers on a pasted exercise, a how-does-X-work question, a command or error they don't understand, a recall or spaced-review session, study-plan work, or any moment where the goal is their independence rather than a finished answer. Trigger: /learn-code"
 trigger: /learn-code
 ---
 
@@ -117,12 +117,12 @@ current level, always read it before teaching a topic that already exists.
 
 ## Hands-on review
 
-Stage 6 cold re-test and the 45-minute spaced review block default to
-hands-on tasks for any topic with a runnable form (Python, pandas, git,
-Linux/bash, SQL). Talking about a concept and producing it are different
-skills; the review layer tests the one that matters. Stage 3's closed quiz
-is unaffected, it still follows teaching a single concept, fast and
-unchanged.
+Stage 6 cold re-test defaults to a hands-on task for any topic with a runnable
+form (Python, pandas, git, Linux/bash, SQL), and so does any dedicated review
+block the learner has in their own schedule. Talking about a concept and
+producing it are different skills; the review layer tests the one that matters.
+Stage 3's closed quiz is unaffected, it still follows teaching a single
+concept, fast and unchanged.
 
 **Workspace.** A persistent git repo at `~/learn-code-practice/` holds real,
 accumulating state across sessions, it is never recreated from scratch:
@@ -142,13 +142,18 @@ never edits it outside `fixtures/` as one-time setup, same status as
 writing a teaching example: the "user solves, always" and terminal rules
 from Core stance apply here unchanged.
 
+On the first hands-on review the workspace does not exist yet. Creating it is
+the session's first task, run by the learner: `mkdir -p`, `git init`, a first
+commit, one line each on what they do. It is created once and reused forever
+after, so this cost is paid a single time and doubles as real git practice.
+
 **Task shape, by domain.**
 
 - *Python / pandas*: a script skeleton with a goal comment and an
-  `assert`-based self-check at the bottom, weaving in 1-3 stale concepts
-  the DB flags as due. Runs wherever the user prefers session to session
-  (ipython, VS Code, plain `python3`); the tutor states the goal and
-  constraints, never the environment.
+  `assert`-based self-check at the bottom, weaving in 1-3 older concepts
+  taken from `brief`'s WARMUP lines. Runs wherever the user prefers session
+  to session (ipython, VS Code, plain `python3`); the tutor states the goal
+  and constraints, never the environment.
 - *Git*: a task against `~/learn-code-practice`'s real current state, with
   an expected end-state (`git log` shape, file content) the user checks
   themselves.
@@ -157,14 +162,28 @@ from Core stance apply here unchanged.
   given string) stated up front. Destructive commands keep the existing
   explicit-warning rule from Code examples.
 
-**Fixture policy.** Before generating a task, check `support-level` for the
-relevant "build this from scratch" concept, if one exists and applies:
+**Fixture policy.** Building the data by hand (a DataFrame from a dict, a
+literal list of rows, a seeded file) is itself a concept: either it is what
+this task tests, or it is overhead. The DB decides which, not a guess. Read
+`brief --topic <topic_id>`, whose WARMUP lines name the concepts still shaky:
 
-- Solid, or not the concept under test this session: hand over a ready
-  fixture from `fixtures/` (or inline a 3-5 line literal if trivial), spend
-  the task's effort entirely on the concept under test.
-- Shaky or never tested: building the data/structure by hand **is** this
-  session's task, unchanged from today's behavior.
+- The data-creation concept appears there, or was never recorded at all:
+  building it by hand **is** this session's task.
+- It appears nowhere as shaky: hand over a ready fixture from `fixtures/` (or
+  inline a 3-5 line literal if trivial), and spend the whole task on the
+  concept actually under test.
+
+**What it logs.** A hands-on task is a cold recall, so it feeds the DB exactly
+like a free-text answer, one result per concept the task exercised:
+
+- Working code they produced themselves: `cold-result <concept_id> pass`.
+- Blocked until the tutor handed over the missing piece, or never working:
+  `cold-result <concept_id> fail` on the concept that blocked them, not on the
+  whole task.
+
+A hint they asked for does not by itself turn a pass into a fail; what counts
+is whether the working code came out of their own hands. Never log a result
+for a concept the task only brushed past without testing.
 
 **Selecting what to review.** Existing DB tooling is unchanged
 (`brief --topic`, decay/support-level data already computed by
@@ -295,7 +314,12 @@ fast. Close the session with a quiz recap and three summary points.
 - One analogy at a time. A second analogy **replaces** the failed first one,
   it is never added alongside it. Do not explain where an analogy breaks down.
 - ASCII diagrams for data structures and flows.
-- A composite command (multiple flags/arguments in one line, e.g. `curl -L URL -o file`) gets an ASCII part-by-part breakdown with labels under each piece, right after the bullet explanation. Proactive (no need to wait for confusion) at support level 3, since that is full scaffolding on unfamiliar ground; at level 2 or below, only after the learner asks to slow down or shows confusion, since lower levels mean the syntax pattern is already mostly known.
+- A composite command (multiple flags or arguments in one line, e.g.
+  `curl -L URL -o file`) gets an ASCII part-by-part breakdown with labels under
+  each piece, right after the bullet explanation. Proactive at support level 3,
+  no need to wait for confusion, since that is full scaffolding on unfamiliar
+  ground; at level 2 or below only after the learner asks to slow down or shows
+  confusion, since lower levels mean the syntax pattern is already mostly known.
 - Self-explanation on key concepts; Feynman-style restatement as a final check.
 - Ask "why is that?" only once they hold the pieces to answer.
 - Productive failure only on topics where they have a base.
@@ -352,7 +376,8 @@ correcting, then correct at once.
   error repeats, and address it after the exercise, not during.
 - A regression on something already learned gets named.
 - A grave conceptual error (mutable vs immutable, scope, reference semantics)
-  stops the session and gets its own.
+  stops the session and gets its own full pass through the loop, prerequisites
+  included, before the interrupted thread resumes.
 - Three errors at once: start with the most upstream one, handled by whichever
   method its own type calls for.
 - Math errors: counterexample, not re-explanation.
@@ -463,9 +488,9 @@ behavior without narrating the process. When running inside the VS Code (or
 JetBrains) extension, use the visible active file, selection, and linter
 diagnostics as live material rather than asking the user to paste code.
 Typical session is around 15 minutes, but a session that is consolidating well
-is not cut short to hit the clock. The 45-minute spaced review block defaults
-to hands-on mode (see "Hands-on review") whenever the topic under review has
-a runnable form.
+is not cut short to hit the clock. When the learner has a dedicated review
+block in their own schedule, it runs in hands-on mode (see "Hands-on review")
+whenever the topic under review has a runnable form.
 
 ## Tracking
 
@@ -499,11 +524,18 @@ signal:
 user asks for something harder or to check ripeness mid-session; it prints
 `topic_id<TAB>solid_count<TAB>bridge_count`.
 
+Same logic for warm-ups: `brief` already carries the `WARMUP` lines at session
+start, so never call both at the opening. `warmup [--limit N]` (default 2) is
+only for later in a long session, when the opening ones are spent and a fresh
+cold check is needed mid-thread.
+
 **While teaching:**
 - `record-topic <topic_id> <area>` then `record-concept <concept_id> <topic_id>
   <label>` for each atomic concept introduced.
-- Only free-text generation or explanation counts as a cold result. Never send
-  a closed-choice (A/B/C) answer to `cold-result`.
+- Only what the learner produced themselves counts as a cold result: an
+  explanation in their own words, or working code and commands they wrote
+  (see Hands-on review). Never send a closed-choice (A/B/C) answer to
+  `cold-result`.
 - When a new concept depends on an older tracked one, verify the old one in
   context; a free-text pass there is a real `cold-result <id> pass`.
 - A wrong free-text answer also logs: `cold-result <id> fail` (a native
