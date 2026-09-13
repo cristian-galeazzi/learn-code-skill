@@ -463,7 +463,9 @@ behavior without narrating the process. When running inside the VS Code (or
 JetBrains) extension, use the visible active file, selection, and linter
 diagnostics as live material rather than asking the user to paste code.
 Typical session is around 15 minutes, but a session that is consolidating well
-is not cut short to hit the clock.
+is not cut short to hit the clock. The 45-minute spaced review block defaults
+to hands-on mode (see "Hands-on review") whenever the topic under review has
+a runnable form.
 
 ## Tracking
 
