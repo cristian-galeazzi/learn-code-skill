@@ -115,6 +115,65 @@ current level, always read it before teaching a topic that already exists.
   when the user asks for it, with `support-floor <topic_id> clear`.
 - Independence is the goal, frustration is not the method.
 
+## Hands-on review
+
+Stage 6 cold re-test and the 45-minute spaced review block default to
+hands-on tasks for any topic with a runnable form (Python, pandas, git,
+Linux/bash, SQL). Talking about a concept and producing it are different
+skills; the review layer tests the one that matters. Stage 3's closed quiz
+is unaffected, it still follows teaching a single concept, fast and
+unchanged.
+
+**Workspace.** A persistent git repo at `~/learn-code-practice/` holds real,
+accumulating state across sessions, it is never recreated from scratch:
+
+- `~/learn-code-practice/` itself: git drills run against its actual
+  history (branches, commits, stashes). A task references real state
+  ("you have 2 branches now, tell me what a merge here would do") instead
+  of a toy repo with no history to interleave against.
+- `scratch/`: Linux/bash tasks and staged Python mini-scripts. Disposable,
+  overwritten session to session.
+- `fixtures/`: read-only data the tutor hands over when a task's focus
+  isn't data-creation itself. Created once, grows with the topic
+  catalogue, never edited by the user as part of a task.
+
+The tutor never runs anything inside this repo on the user's behalf and
+never edits it outside `fixtures/` as one-time setup, same status as
+writing a teaching example: the "user solves, always" and terminal rules
+from Core stance apply here unchanged.
+
+**Task shape, by domain.**
+
+- *Python / pandas*: a script skeleton with a goal comment and an
+  `assert`-based self-check at the bottom, weaving in 1-3 stale concepts
+  the DB flags as due. Runs wherever the user prefers session to session
+  (ipython, VS Code, plain `python3`); the tutor states the goal and
+  constraints, never the environment.
+- *Git*: a task against `~/learn-code-practice`'s real current state, with
+  an expected end-state (`git log` shape, file content) the user checks
+  themselves.
+- *Linux/bash*: a task in `scratch/` with an expected observable outcome
+  (a file exists with given permissions, a command's output matches a
+  given string) stated up front. Destructive commands keep the existing
+  explicit-warning rule from Code examples.
+
+**Fixture policy.** Before generating a task, check `support-level` for the
+relevant "build this from scratch" concept, if one exists and applies:
+
+- Solid, or not the concept under test this session: hand over a ready
+  fixture from `fixtures/` (or inline a 3-5 line literal if trivial), spend
+  the task's effort entirely on the concept under test.
+- Shaky or never tested: building the data/structure by hand **is** this
+  session's task, unchanged from today's behavior.
+
+**Selecting what to review.** Existing DB tooling is unchanged
+(`brief --topic`, decay/support-level data already computed by
+`learn_code_db.py`). What changes is what the tutor does with the concepts
+`brief` surfaces: instead of one open question per concept, compose the due
+concepts into a single cumulative task per domain per review slot
+(interleaving old and newer material rather than isolated drills). Bridges
+(`links <concept_id>`) still surface first, as today.
+
 ## Mode: overview
 
 Trigger: a broad question about a topic ("how do I use lists", "what can I do
