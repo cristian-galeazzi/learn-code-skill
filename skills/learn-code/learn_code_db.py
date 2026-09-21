@@ -12,6 +12,13 @@ DEFAULT_DB = Path.home() / ".claude" / "learn-code" / "state.db"
 # acronym areas that .capitalize() would mangle into Sql, Ml, Dl
 AREA_LABELS = {"sql": "SQL", "ml": "ML", "dl": "DL", "html": "HTML", "css": "CSS"}
 
+# "not recalled recently" decay window, shared by concepts (challenge_candidates)
+# and arc theses (brief): a single number for what "recent" means.
+COLD_DECAY_DAYS = 10
+
+# How many unclosed to-deepen notes brief shows. The rest live in growth-map.md.
+DEEPEN_SHOWN = 3
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS topics (
     id TEXT PRIMARY KEY, area TEXT NOT NULL,
@@ -43,6 +50,20 @@ CREATE TABLE IF NOT EXISTS links (
     b_id TEXT NOT NULL REFERENCES concepts(id),
     note TEXT NOT NULL, created_at TEXT NOT NULL,
     UNIQUE (a_id, b_id));
+CREATE TABLE IF NOT EXISTS arcs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id TEXT NOT NULL REFERENCES topics(id),
+    thesis TEXT,
+    no_thesis_reason TEXT,
+    direction TEXT,
+    state TEXT NOT NULL DEFAULT 'open' CHECK (state IN ('open','closed')),
+    opened_at TEXT NOT NULL,
+    closed_at TEXT,
+    last_recalled TEXT);
+CREATE TABLE IF NOT EXISTS arc_concepts (
+    arc_id INTEGER NOT NULL REFERENCES arcs(id),
+    concept_id TEXT NOT NULL REFERENCES concepts(id),
+    PRIMARY KEY (arc_id, concept_id));
 """
 
 
@@ -440,17 +461,39 @@ def brief(conn: sqlite3.Connection, topic_id: str | None = None,
             "SELECT a_id, b_id, note FROM links ORDER BY created_at"):
         lines.append(f"BRIDGE\t{a_id}\t{b_id}\t{note}")
     deepen_where = " AND topic_id=?" if topic_id else ""
+    # Oldest first and capped: unclosed notes accumulate for months (21 open
+    # against 7 ever closed, 2026-09-20), so an uncapped list buries every other
+    # tag. Oldest first on purpose: a note sitting for two months is either
+    # important or dead, and both cases need it in view, not hidden behind
+    # fresher ones. The full list stays in growth-map.md.
     for tid, label in conn.execute(
             "SELECT topic_id, label FROM to_deepen WHERE done=0"
-            f"{deepen_where} ORDER BY created_at", params):
+            f"{deepen_where} ORDER BY created_at LIMIT {DEEPEN_SHOWN}", params):
         lines.append(f"DEEPEN\t{tid}\t{label}")
     for tid, solid, bridges in challenge_candidates(conn):
         if topic_id is None or tid == topic_id:
             lines.append(f"CHALLENGE\t{tid}\t{solid}\t{bridges}")
+    arc_where = " AND topic_id=?" if topic_id else ""
+    arc_params = (topic_id,) if topic_id else ()
+    for arc_id, tid, label in conn.execute(
+            "SELECT id, topic_id, COALESCE(thesis, no_thesis_reason) FROM arcs "
+            f"WHERE state='open'{arc_where} ORDER BY opened_at", arc_params):
+        lines.append(f"ARC\t{arc_id}\t{tid}\t{label}")
+    # a thesis is a cold-recall probe only once it has had time to fade: fresh
+    # off a close it is still in working memory, so restating it tests nothing.
+    thesis_cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat()
+    recall_cutoff = (datetime.now(timezone.utc)
+                     - timedelta(days=COLD_DECAY_DAYS)).isoformat()
+    for arc_id, thesis in conn.execute(
+            "SELECT id, thesis FROM arcs WHERE state='closed' AND thesis IS NOT NULL "
+            "AND closed_at<=? AND (last_recalled IS NULL OR last_recalled<=?)"
+            f"{arc_where} ORDER BY closed_at",
+            (thesis_cutoff, recall_cutoff) + arc_params):
+        lines.append(f"THESIS\t{arc_id}\t{thesis}")
     return "\n".join(lines) if lines else "EMPTY"
 
 
-def challenge_candidates(conn: sqlite3.Connection, min_days: int = 10,
+def challenge_candidates(conn: sqlite3.Connection, min_days: int = COLD_DECAY_DAYS,
                          min_solid: int = 2) -> list[tuple[str, int, int]]:
     """Return (topic_id, solid_count, bridge_count) for topics ripe for a hard problem.
 
@@ -480,7 +523,12 @@ def challenge_candidates(conn: sqlite3.Connection, min_days: int = 10,
 
 
 def render_bars(conn: sqlite3.Connection, width: int = 20) -> str:
-    """Render an ASCII mastery bar chart grouped by area then topic.
+    """Render never-tested/recalled/solid counts per topic, grouped by area.
+
+    A single mastery percentage reads as 0% right after a session where every
+    concept was recalled cold for the first time, since `solid` needs more
+    than one spaced pass. Three counted buckets, summing to the topic total,
+    keep that first pass visible instead of hiding it behind "0%".
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
@@ -488,20 +536,94 @@ def render_bars(conn: sqlite3.Connection, width: int = 20) -> str:
     >>> _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,last_seen) VALUES ('t/abc','t','a','solid','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,last_seen) VALUES ('t/def','t','b','shaky','x','x')")
     >>> conn.commit()
-    >>> "75%" in render_bars(conn) and "Python" in render_bars(conn)
+    >>> out = render_bars(conn)
+    >>> "Python" in out and "solid" in out and "1/2" in out
     True
     """
+    rows = conn.execute(
+        "SELECT t.area, t.id, "
+        "  SUM(CASE WHEN c.cold_passes = 0 AND c.cold_fails = 0 THEN 1 ELSE 0 END), "
+        "  SUM(CASE WHEN (c.cold_passes > 0 OR c.cold_fails > 0) "
+        "            AND c.state != 'solid' THEN 1 ELSE 0 END), "
+        "  SUM(CASE WHEN c.state = 'solid' THEN 1 ELSE 0 END), "
+        "  COUNT(c.id) "
+        "FROM topics t JOIN concepts c ON c.topic_id = t.id "
+        "GROUP BY t.id ORDER BY t.area, t.id").fetchall()
     lines: list[str] = []
     current_area = None
-    for area, tid, pct in topic_mastery(conn):
+    for area, tid, never_tested, recalled, solid, total in rows:
         if area != current_area:
             lines.append(AREA_LABELS.get(area, area.capitalize()))
             current_area = area
-        filled = round(pct / 100 * width)
-        bar = "█" * filled + "░" * (width - filled)
         short = tid.split(".", 1)[-1]  # drop the area prefix already in the header
-        lines.append(f"  {short:<14} {bar} {pct:.0f}%")
+        lines.append(f"  {short}")
+        for label, count in (
+            ("never tested", never_tested),
+            ("recalled", recalled),
+            ("solid", solid),
+        ):
+            filled = round(count / total * width) if total else 0
+            bar = "█" * filled + "░" * (width - filled)
+            lines.append(f"    {label:<13} {bar}  {count}/{total}")
     return "\n".join(lines) if lines else "(no concepts tracked yet)"
+
+
+def arc_open(conn: sqlite3.Connection, topic_id: str, thesis: str | None,
+            no_thesis_reason: str | None, direction: str | None) -> int:
+    """Open a governing-idea arc for a topic; return the new arc id.
+
+    A thesis or an explicit reason for having none is mandatory: an arc with
+    neither is exactly the unexamined drift this table exists to prevent.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','a','x','x')")
+    >>> arc_open(conn, "t", "the idea", None, None) > 0
+    True
+    """
+    if not thesis and not no_thesis_reason:
+        raise ValueError("arc needs a thesis or a stated reason for having none")
+    exists = conn.execute("SELECT 1 FROM topics WHERE id=?", (topic_id,)).fetchone()
+    if not exists:
+        raise KeyError(f"unknown topic: {topic_id}")
+    cur = conn.execute(
+        "INSERT INTO arcs (topic_id, thesis, no_thesis_reason, direction, "
+        "opened_at) VALUES (?,?,?,?,?)",
+        (topic_id, thesis, no_thesis_reason, direction, now()))
+    conn.commit()
+    return cur.lastrowid
+
+
+def arc_close(conn: sqlite3.Connection, arc_id: int) -> None:
+    """Close an open arc.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','a','x','x')")
+    >>> arc_id = arc_open(conn, "t", "the idea", None, None)
+    >>> arc_close(conn, arc_id)
+    >>> arc_current(conn, None)
+    []
+    """
+    conn.execute("UPDATE arcs SET state='closed', closed_at=? WHERE id=?",
+                (now(), arc_id))
+    conn.commit()
+
+
+def arc_current(conn: sqlite3.Connection, topic_id: str | None) -> list[tuple]:
+    """Return open arcs, optionally scoped to one topic.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> arc_current(conn, None)
+    []
+    """
+    where = " AND topic_id=?" if topic_id else ""
+    params = (topic_id,) if topic_id else ()
+    rows = conn.execute(
+        "SELECT id, topic_id, thesis, no_thesis_reason, direction, opened_at "
+        f"FROM arcs WHERE state='open'{where} ORDER BY opened_at", params).fetchall()
+    return [tuple(r) for r in rows]
 
 
 def _conn_dir(conn: sqlite3.Connection) -> Path:
@@ -562,6 +684,7 @@ def main(argv: list[str]) -> int:
     p_concept = sub.add_parser("record-concept")
     p_concept.add_argument("concept_id"); p_concept.add_argument("topic_id")
     p_concept.add_argument("label")
+    p_concept.add_argument("--arc", type=int, default=None)
     p_cold = sub.add_parser("cold-result")
     p_cold.add_argument("concept_id")
     p_cold.add_argument("result", choices=["pass", "fail"])
@@ -595,6 +718,16 @@ def main(argv: list[str]) -> int:
     p_chal.add_argument("--min-solid", type=int, default=2)
     sub.add_parser("bars")
     sub.add_parser("render-map")
+    p_arc_open = sub.add_parser("arc-open")
+    p_arc_open.add_argument("topic_id")
+    p_arc_thesis = p_arc_open.add_mutually_exclusive_group(required=True)
+    p_arc_thesis.add_argument("--thesis", default=None)
+    p_arc_thesis.add_argument("--no-thesis", default=None)
+    p_arc_open.add_argument("--direction", default=None)
+    p_arc_close = sub.add_parser("arc-close")
+    p_arc_close.add_argument("arc_id", type=int)
+    p_arc_cur = sub.add_parser("arc-current")
+    p_arc_cur.add_argument("--topic", default=None)
     args = parser.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -609,7 +742,13 @@ def main(argv: list[str]) -> int:
         if args.cmd == "record-topic":
             record_topic(conn, args.topic_id, args.area); return 0
         if args.cmd == "record-concept":
-            record_concept(conn, args.concept_id, args.topic_id, args.label); return 0
+            record_concept(conn, args.concept_id, args.topic_id, args.label)
+            if args.arc is not None:
+                conn.execute(
+                    "INSERT OR IGNORE INTO arc_concepts (arc_id, concept_id) "
+                    "VALUES (?,?)", (args.arc, args.concept_id))
+                conn.commit()
+            return 0
         if args.cmd == "cold-result":
             print(cold_result(conn, args.concept_id, args.result == "pass")); return 0
         if args.cmd == "end-session":
@@ -653,6 +792,16 @@ def main(argv: list[str]) -> int:
             print(render_bars(conn)); return 0
         if args.cmd == "render-map":
             print(render_map(conn, None)); return 0
+        if args.cmd == "arc-open":
+            print(arc_open(conn, args.topic_id, args.thesis,
+                           args.no_thesis, args.direction))
+            return 0
+        if args.cmd == "arc-close":
+            arc_close(conn, args.arc_id); return 0
+        if args.cmd == "arc-current":
+            for row in arc_current(conn, args.topic):
+                print("\t".join("" if v is None else str(v) for v in row))
+            return 0
     except (sqlite3.Error, KeyError, OSError) as exc:
         # the tutor drives this over Bash: a traceback would leak local paths into the transcript
         print(f"learn_code_db: {exc}", file=sys.stderr)

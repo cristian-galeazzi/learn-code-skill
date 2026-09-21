@@ -5,11 +5,29 @@ import sys
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 SPEC = Path(__file__).resolve().parent.parent / "skills" / "learn-code" / "learn_code_db.py"
 SKILL_MD = SPEC.parent / "SKILL.md"
+REFERENCE_DIR = SPEC.parent / "reference"
 _spec = importlib.util.spec_from_file_location("learn_code_db", SPEC)
 lc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(lc)
+
+
+def _tutor_docs() -> str:
+    """Every document the tutor can read: SKILL.md plus its reference files.
+
+    The 2026-09-20 restructure split the CLI documentation out of SKILL.md into
+    reference/tracking.md, so a check that reads only SKILL.md now measures
+    where a command is written down rather than whether it is.
+
+    >>> "learn-code" in _tutor_docs()
+    True
+    """
+    parts = [SKILL_MD.read_text()]
+    parts.extend(p.read_text() for p in sorted(REFERENCE_DIR.glob("*.md")))
+    return "\n".join(parts)
 
 
 def _cli_subcommands() -> set[str]:
@@ -120,7 +138,9 @@ def test_topic_mastery_and_map(tmp_path):
 
     # bars show the short label under the area header, not the redundant full id
     bars = lc.render_bars(conn)
-    assert "Python" in bars and "dictionaries" in bars and "75%" in bars
+    # a, b cold-tested and passed -> solid; c, d never cold-tested -> never tested
+    assert "Python" in bars and "dictionaries" in bars and "solid" in bars
+    assert "2/4" in bars
     assert "python.dictionaries" not in bars
 
     out = lc.render_map(conn, str(tmp_path / "growth-map.md"))
@@ -439,20 +459,145 @@ def test_challenge_single_cross_topic_bridge_counts_once(tmp_path):
 
 
 def test_skill_doc_references_only_real_subcommands():
-    # SKILL.md telling the tutor to run a command the CLI does not expose is a
+    # A doc telling the tutor to run a command the CLI does not expose is a
     # runtime failure the tutor cannot recover from, so it is a test, not a review nit.
-    text = SKILL_MD.read_text()
+    text = _tutor_docs()
     spans = re.findall(r"`([^`]+)`", text)
     referenced = {s.strip().split()[0] for s in spans if s.strip()}
     hyphenated = {t for t in referenced
                   if re.fullmatch(r"[a-z][a-z0-9]*(-[a-z0-9]+)+", t)}
     assert hyphenated <= _cli_subcommands(), \
-        f"SKILL.md references non-existent subcommands: {hyphenated - _cli_subcommands()}"
+        f"docs reference non-existent subcommands: {hyphenated - _cli_subcommands()}"
 
 
 def test_every_subcommand_is_documented_in_skill_doc():
     # The reverse drift: a command ships but the tutor never learns it exists.
-    text = SKILL_MD.read_text()
+    text = _tutor_docs()
     undocumented = {c for c in _cli_subcommands()
                     if c != "init" and f"`{c}" not in text}
-    assert not undocumented, f"CLI subcommands missing from SKILL.md: {undocumented}"
+    assert not undocumented, f"CLI subcommands missing from the tutor docs: {undocumented}"
+
+
+def test_bars_separates_never_tested_from_recalled(tmp_path):
+    """A concept recalled once is not solid, and must not read as nothing."""
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "python.pandas", "python"])
+    for c in ("a", "b", "c"):
+        lc.main(["--db", db, "record-concept",
+                 f"python.pandas/{c}", "python.pandas", c])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    lc.end_session(conn, "python.pandas")            # all three -> shaky
+    # a: never cold-tested. b: recalled once, still shaky. c: solid.
+    lc.cold_result(conn, "python.pandas/b", False)   # counts, stays shaky
+    lc.cold_result(conn, "python.pandas/c", True)    # -> solid
+
+    out = lc.render_bars(conn)
+
+    assert "never tested" in out
+    assert "recalled" in out
+    assert "solid" in out
+
+
+def _arc_db(tmp_path, topic="stats.p-values", area="stats"):
+    """Build a database with one topic and return an open connection."""
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", topic, area])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    return conn
+
+
+def test_arc_open_requires_thesis_or_reason(tmp_path):
+    """An arc with no idea and no stated reason is the failure this prevents."""
+    conn = _arc_db(tmp_path)
+    with pytest.raises(ValueError, match="thesis"):
+        lc.arc_open(conn, "stats.p-values", None, None, None)
+
+
+def test_arc_open_accepts_a_declared_absence(tmp_path):
+    """Pure volume has no thesis, and saying so is legitimate."""
+    conn = _arc_db(tmp_path, "python.pandas", "python")
+    arc_id = lc.arc_open(conn, "python.pandas", None,
+                         "pure volume, this is for the fingers", None)
+    assert arc_id > 0
+
+
+def test_arc_current_returns_only_open_arcs(tmp_path):
+    conn = _arc_db(tmp_path)
+    arc_id = lc.arc_open(conn, "stats.p-values",
+                         "the threshold IS the false positive rate", None, None)
+    assert len(lc.arc_current(conn, None)) == 1
+    lc.arc_close(conn, arc_id)
+    assert lc.arc_current(conn, None) == []
+
+
+def test_arc_open_on_unknown_topic_raises(tmp_path):
+    conn = _arc_db(tmp_path)
+    with pytest.raises(KeyError):
+        lc.arc_open(conn, "nope.nothing", "a thesis", None, None)
+
+
+def test_brief_reports_an_open_arc(tmp_path):
+    conn = _arc_db(tmp_path)
+    lc.arc_open(conn, "stats.p-values",
+                "the threshold IS the false positive rate", None, None)
+    out = lc.brief(conn)
+    assert "ARC\t" in out
+    assert "the threshold IS the false positive rate" in out
+
+
+def test_brief_offers_a_closed_thesis_for_cold_recall(tmp_path):
+    """A thesis closed long enough ago is the strongest recall probe available."""
+    conn = _arc_db(tmp_path)
+    arc_id = lc.arc_open(conn, "stats.p-values",
+                         "the threshold IS the false positive rate", None, None)
+    lc.arc_close(conn, arc_id)
+    conn.execute("UPDATE arcs SET closed_at='2020-01-01T00:00:00' WHERE id=?",
+                 (arc_id,))
+    conn.commit()
+    assert "THESIS\t" in lc.brief(conn)
+
+
+def test_brief_does_not_offer_a_freshly_closed_thesis(tmp_path):
+    """Recalling a thesis ten minutes after closing it tests nothing."""
+    conn = _arc_db(tmp_path)
+    arc_id = lc.arc_open(conn, "stats.p-values", "a thesis worth recalling",
+                         None, None)
+    lc.arc_close(conn, arc_id)
+    assert "THESIS\t" not in lc.brief(conn)
+
+
+def test_brief_never_offers_a_no_thesis_arc_for_recall(tmp_path):
+    """There is nothing to restate when the block declared it had no idea."""
+    conn = _arc_db(tmp_path, "python.pandas", "python")
+    arc_id = lc.arc_open(conn, "python.pandas", None, "pure volume", None)
+    lc.arc_close(conn, arc_id)
+    conn.execute("UPDATE arcs SET closed_at='2020-01-01T00:00:00' WHERE id=?",
+                 (arc_id,))
+    conn.commit()
+    assert "THESIS\t" not in lc.brief(conn)
+
+
+def test_brief_caps_deepen_at_the_three_oldest(tmp_path):
+    """Unclosed notes accumulate for months: brief shows the stale ones, not all."""
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "python.pandas", "python"])
+    for i in range(6):
+        lc.main(["--db", db, "to-deepen", "python.pandas", f"note{i}"])
+    conn = sqlite3.connect(db)
+    lc.init_db(conn)
+    # created_at is identical for all six, so order by rowid decides: make it explicit
+    for i in range(6):
+        conn.execute("UPDATE to_deepen SET created_at=? WHERE label=?",
+                     (f"2026-0{i + 1}-01T00:00:00", f"note{i}"))
+    conn.commit()
+
+    deepen = [l for l in lc.brief(conn).split("\n") if l.startswith("DEEPEN")]
+
+    assert len(deepen) == 3, "brief must cap DEEPEN, or it grows without bound"
+    assert "note0" in deepen[0], "the oldest note comes first: stale items must surface"
+    assert not any("note5" in l for l in deepen), "the newest note is not the urgent one"
