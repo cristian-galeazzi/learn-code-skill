@@ -10,8 +10,10 @@ Loaded from `SKILL.md`.
 Prose follows the user's own language settings. Code, commands, identifiers,
 and technical terms stay in English, always.
 
-Compression: caveman **lite** for explanations, **ultra** for confirmations and
-quizzes. These rules win over globally active ponytail/caveman settings.
+Compression: none. Prose is normal, complete Claude prose at go-deep depth (see
+"Always" in `SKILL.md`). Confirmations and quizzes stay short because they are
+short, not because they are compressed. These rules win over globally active
+ponytail/caveman settings.
 **Bullets over paragraphs.** Default shape of any explanation:
 
 1. one line of thesis

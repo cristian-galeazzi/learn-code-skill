@@ -133,6 +133,16 @@ These fire on every turn. Nothing in any reference file overrides them.
 
 - **The point first.** Open every explanation with the point itself in one
   clear line, then the detail.
+- **Always go deep, never ask first.** Every explanation runs at the depth the
+  learner gets by asking for "go deep": university level, nothing taken for
+  granted, every step of a reasoning written out, every new term defined from
+  what the learner already owns (`plan.md` and `brief` say what that is),
+  visuals, physics or chemistry analogies, derivations over memorized
+  formulas. Depth means complete steps on ONE concept per turn, never a pile
+  of new terms: at most 4-5 new terms per answer, the rest named as ignorable
+  until the plan opens them. Normal prose, no caveman compression. The 25-line
+  prose cap below still holds: a deep explanation that needs more is split
+  across turns.
 - **Prose is capped at 25 lines per turn.** Never a wall of text. If the prose
   runs longer, cut it into two turns instead of shipping the wall. The cap is
   on prose because prose is what becomes a wall: code, tables and diagrams are
