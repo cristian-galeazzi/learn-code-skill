@@ -25,7 +25,10 @@ signal:
 | Tag | Meaning | What to do with it |
 |-----|---------|--------------------|
 | `SUPPORT` | topic, level 0-3, reason | set the scaffolding for that topic |
-| `WARMUP` | concept id, label | fold a quick free-text cold check into the opening |
+| `COVER` | concept id, label | coverage: one concept from each topic with no cold recall in 7 days. Never skipped, whatever else the queue holds: no studied topic may go untouched for weeks |
+| `WARMUP` | concept id, label | practice lane: a hands-on cold task (up to 10, at most 3 per area). Cold fails first (retested from the next day), then solid concepts whose rest interval ran out, most overdue first |
+| `BALANCE` | backlog, new_last, quota, uncovered | the day's review target: quota = new concepts of the last session day + backlog/7, so old concepts drain faster than new ones arrive; uncovered = topics forced in by coverage. Say it in one line at the opening |
+| `FLASH` | concept id, label | flash lane: never cold-tested backlog, oldest first. One-line question, ~30 seconds, right or wrong, then `cold-result`. Runs after the practice lane, or in an extra review session |
 | `MISCONCEPTION` | label, stumble count | watch for it, do not mention it up front |
 | `BRIDGE` | concept a, concept b, note | reuse the bridge when either side comes up |
 | `DEEPEN` | topic, label | offer it when the current thread is done |
@@ -42,6 +45,31 @@ Same logic for warm-ups: `brief` already carries the `WARMUP` lines at session
 start, so never call both at the opening. `warmup [--limit N]` (default 2) is
 only for later in a long session, when the opening ones are spent and a fresh
 cold check is needed mid-thread.
+
+**Bundled concepts.** Some older concepts pack several items into one label
+("pwd, ls, cd, mkdir, touch, cp, mv, rm"). When one comes up in review, do not
+test it as one: split it on the spot with `record-concept` into atomic ids
+under the same topic, test one, and leave the rest for the queue.
+
+**Where it came from.** Every new concept gets `record-concept ... --source
+"<book> p.<n>"` (or the course section, or the official docs page). `brief`
+prints the source as a fourth field, and review reopens that page for volume
+work instead of improvising material.
+
+**A recall with a nudge.** If the learner needed a hint to get there, log
+`cold-result <id> hint`: it moves the state like a fail, and the history keeps
+it apart from a clean miss.
+
+**What counts as cold.** A check in the session that taught the concept shows
+understanding, not memory: `cold-result` on a concept still `learning` changes
+nothing. The first real recall comes 2 days after the concept was introduced,
+which is why a new concept never shows up in tomorrow's queue.
+
+**Spaced recall.** A solid concept is not done forever: it comes back as a
+`WARMUP` once `7 * 3**(net - 1)` days have passed since its last cold check
+(net = cold passes minus cold fails, at least 1: 7, 21, 63, 189 days). A pass
+lengthens the next rest, a fail sends it back to shaky. For an extra review
+session the user asks for, run `brief --quota N` to size the flash lane to N.
 
 **While teaching:**
 - `record-topic <topic_id> <area>` then `record-concept <concept_id> <topic_id>
@@ -113,3 +141,23 @@ state, not a problem to report: point at the next concept instead of a
 milestone and say nothing about plans. No wizard, no warning, no first-run
 prompt. `reference/plan-template.md` is the shape, for a learner who goes
 looking.
+
+## Weekly and monthly
+
+- **`report [--days N]`** (default 28): pass and hint rates by gap since the
+  previous recall (`GAP <1|1-3|4-10|11-30|30+`), by area (`AREA`), and the
+  topics coverage is forcing in (`UNCOVERED`). Read it at the Sunday check-in:
+  if the 11-30 day bucket falls well below the others, the rest intervals are
+  too long.
+- **Mixed challenge, once a week** (the optional Saturday session): one task
+  that needs 2-3 areas at once, for example numpy plus pandas plus a shell
+  step, built from examples in the learner's books on concepts already
+  reviewed at least once. The learner picks the tools; log a `cold-result` for
+  each concept it exercised. It trains choosing the tool, which single-concept
+  recall never does.
+- **End of every new chapter**: before the session closes, record its 3-6 key
+  concepts with `--source`. When the learner studied a chapter alone (book or
+  LM Notebook), they name the chapter and pages, and the tutor records the
+  concepts from those pages: what is not in the database never comes back.
+- **First Sunday of the month**: close or delete stale `DEEPEN` notes and
+  misconceptions that have not recurred, so `brief` keeps showing signal.

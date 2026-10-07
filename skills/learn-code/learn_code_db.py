@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import sqlite3
 import sys
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,31 @@ COLD_DECAY_DAYS = 10
 # How many unclosed to-deepen notes brief shows. The rest live in growth-map.md.
 DEEPEN_SHOWN = 3
 
+# Spaced recall (2026-10-07). A solid concept used to stay solid forever, so it
+# was never asked again and quietly faded (linspace: solid on 09-25, forgotten by
+# 10-06). Now it comes back after RECALL_BASE_DAYS * RECALL_GROWTH**(net - 1)
+# days, net = passes - fails. No cap on purpose: a capped interval makes every
+# solid concept return forever, and daily load would grow with the whole DB.
+RECALL_BASE_DAYS = 7
+RECALL_GROWTH = 3
+# Practice lane size and per-area cap: 10 hands-on items per Hands block, and no
+# area may take more than 3 of them, so a topic with many fails (stats) cannot
+# crowd out the others.
+PRACTICE_MAX = 10
+AREA_CAP = 3
+# Never-tested backlog must drain faster than new concepts arrive: the daily
+# quota is yesterday's new concepts plus 1/BACKLOG_DAYS of the backlog.
+BACKLOG_DAYS = 7
+# A check in the session that taught a concept shows understanding, not memory:
+# the first real recall comes FIRST_RECALL_DAYS later. A cold fail is retested
+# from the next day.
+FIRST_RECALL_DAYS = 2
+FAIL_RETEST_DAYS = 1
+# Coverage outranks every other rule: a topic with no cold recall in this many
+# days gets one concept in today's queue, whatever its due dates say. Weeks
+# without touching studied material (20 days in Sept-Oct 2026) must not recur.
+COVERAGE_DAYS = 7
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS topics (
     id TEXT PRIMARY KEY, area TEXT NOT NULL,
@@ -31,7 +57,13 @@ CREATE TABLE IF NOT EXISTS concepts (
     intro_session TEXT NOT NULL,
     cold_passes INTEGER NOT NULL DEFAULT 0,
     cold_fails INTEGER NOT NULL DEFAULT 0,
-    last_seen TEXT NOT NULL, last_cold TEXT);
+    last_seen TEXT NOT NULL, last_cold TEXT,
+    source TEXT);
+CREATE TABLE IF NOT EXISTS recalls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    concept_id TEXT NOT NULL REFERENCES concepts(id),
+    ts TEXT NOT NULL,
+    result TEXT NOT NULL CHECK (result IN ('pass','fail','hint')));
 CREATE TABLE IF NOT EXISTS misconceptions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     concept_id TEXT REFERENCES concepts(id),
@@ -120,6 +152,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     cols = {r[1] for r in conn.execute("PRAGMA table_info(topics)")}
     if "support_floor" not in cols:
         conn.execute("ALTER TABLE topics ADD COLUMN support_floor INTEGER")
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(concepts)")}
+    if "source" not in cols:
+        conn.execute("ALTER TABLE concepts ADD COLUMN source TEXT")
     conn.commit()
 
 
@@ -152,8 +187,11 @@ def record_topic(conn: sqlite3.Connection, topic_id: str, area: str) -> None:
 
 
 def record_concept(conn: sqlite3.Connection, concept_id: str,
-                   topic_id: str, label: str) -> None:
+                   topic_id: str, label: str, source: str | None = None) -> None:
     """Insert a concept as 'learning' if new, else touch last_seen.
+
+    `source` is where it was learned (book and page, course section, official
+    docs), so review can reopen the real page instead of recalling from memory.
 
     >>> conn = sqlite3.connect(":memory:")  # doctest: +SKIP
     >>> init_db(conn)  # doctest: +SKIP
@@ -163,17 +201,23 @@ def record_concept(conn: sqlite3.Connection, concept_id: str,
     exists = conn.execute("SELECT 1 FROM concepts WHERE id=?",
                           (concept_id,)).fetchone()
     if exists:
-        conn.execute("UPDATE concepts SET last_seen=? WHERE id=?", (ts, concept_id))
+        conn.execute("UPDATE concepts SET last_seen=?, source=COALESCE(source, ?) "
+                     "WHERE id=?", (ts, source, concept_id))
     else:
         conn.execute(
             "INSERT INTO concepts (id, topic_id, label, state, intro_session, "
-            "last_seen) VALUES (?,?,?,'learning',?,?)",
-            (concept_id, topic_id, label, today(), ts))
+            "last_seen, source) VALUES (?,?,?,'learning',?,?,?)",
+            (concept_id, topic_id, label, today(), ts, source))
     conn.commit()
 
 
-def cold_result(conn: sqlite3.Connection, concept_id: str, passed: bool) -> str:
+def cold_result(conn: sqlite3.Connection, concept_id: str, passed: bool,
+                hint: bool = False) -> str:
     """Apply the mastery state machine for a cold-recall result; return new state.
+
+    `hint=True` is a recall that needed a nudge: it moves the state like a fail
+    (a nudged answer is not memory) but is logged apart, so `report` can tell
+    "forgot" from "almost".
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
@@ -185,23 +229,35 @@ def cold_result(conn: sqlite3.Connection, concept_id: str, passed: bool) -> str:
     'solid'
     >>> cold_result(conn, "t/c", False)
     'shaky'
+
+    A concept still `learning` was taught this session, so its check is not
+    cold: the state and counters stay as they are.
     """
     row = conn.execute("SELECT state FROM concepts WHERE id=?",
                        (concept_id,)).fetchone()
     if row is None:
         raise KeyError(f"unknown concept: {concept_id}")
     state = row[0]
+    if state == "learning":
+        # same-session check: understanding, not recall, so no cold counters
+        conn.execute("UPDATE concepts SET last_seen=? WHERE id=?", (now(), concept_id))
+        conn.commit()
+        return state
+    if hint:
+        passed = False
     if passed and state == "shaky":
         state = "solid"
     elif not passed and state == "solid":
         state = "shaky"
-    # learning stays learning; shaky+fail stays shaky
+    # shaky+fail stays shaky
     counter = "cold_passes" if passed else "cold_fails"
     ts = now()
     conn.execute(
         f"UPDATE concepts SET state=?, {counter}={counter}+1, "
         "last_cold=?, last_seen=? WHERE id=?",
         (state, ts, ts, concept_id))
+    conn.execute("INSERT INTO recalls (concept_id, ts, result) VALUES (?,?,?)",
+                 (concept_id, ts, "hint" if hint else "pass" if passed else "fail"))
     conn.commit()
     return state
 
@@ -225,23 +281,192 @@ def end_session(conn: sqlite3.Connection, topics_seen: str) -> None:
     conn.commit()
 
 
-def warmup(conn: sqlite3.Connection, limit: int = 2) -> list[tuple[str, str]]:
-    """Return the most at-risk shaky concepts as (concept_id, label) pairs.
+def recall_interval_days(passes: int, fails: int) -> int:
+    """Days a solid concept rests before it is due for cold recall again.
+
+    >>> recall_interval_days(2, 0)
+    21
+    >>> recall_interval_days(3, 2)  # fails shorten the rest
+    7
+    """
+    net = max(1, passes - fails)
+    return RECALL_BASE_DAYS * RECALL_GROWTH ** (net - 1)
+
+
+def _parse_ts(ts: str) -> datetime:
+    """Parse a stored ISO timestamp; naive values are UTC (older rows).
+
+    >>> _parse_ts("2026-10-01T00:00:00").tzinfo is not None
+    True
+    """
+    dt = datetime.fromisoformat(ts)
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+def _eligible_cutoff() -> str:
+    """Latest intro_session date old enough for a first real recall.
+
+    >>> _eligible_cutoff() < today()
+    True
+    """
+    return (datetime.now(timezone.utc).date()
+            - timedelta(days=FIRST_RECALL_DAYS)).isoformat()
+
+
+def warmup(conn: sqlite3.Connection, limit: int = PRACTICE_MAX,
+           area_cap: int = AREA_CAP,
+           exclude: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
+    """Return the practice lane: failed concepts due again, then solid ones due.
+
+    Failed first, each group most overdue first, at most `area_cap` per area.
+    Never-tested concepts are the flash lane's job (see `flash`).
 
     >>> conn = sqlite3.connect(":memory:")
     >>> init_db(conn)
     >>> _ = conn.execute("INSERT INTO topics (id,area,created_at,updated_at) VALUES ('t','python','x','x')")
     >>> _ = conn.execute("INSERT INTO concepts "
-    ...     "(id, topic_id, label, state, intro_session, last_seen, cold_fails) "
-    ...     "VALUES ('t/c','t','c','shaky','x','x',1)")
+    ...     "(id, topic_id, label, state, intro_session, last_seen, cold_fails, last_cold) "
+    ...     "VALUES ('t/c','t','c','shaky','x','x',1,'2026-01-01T00:00:00+00:00')")
     >>> warmup(conn, limit=1)
     [('t/c', 'c')]
     """
     rows = conn.execute(
+        "SELECT c.id, c.label, c.state, c.cold_passes, c.cold_fails, c.last_cold, t.area "
+        "FROM concepts c JOIN topics t ON t.id = c.topic_id "
+        "WHERE c.last_cold IS NOT NULL AND c.state IN ('shaky','solid')").fetchall()
+    now_dt = datetime.now(timezone.utc)
+    due: list[tuple[int, datetime, str, str, str]] = []
+    for cid, label, state, passes, fails, last_cold, area in rows:
+        if cid in exclude:
+            continue
+        if state == "solid":
+            rank, wait = 1, recall_interval_days(passes, fails)
+        else:
+            rank, wait = 0, FAIL_RETEST_DAYS
+        due_at = _parse_ts(last_cold) + timedelta(days=wait)
+        if due_at <= now_dt:
+            due.append((rank, due_at, cid, label, area))
+    due.sort()
+    picked: list[tuple[str, str]] = []
+    per_area: dict[str, int] = {}
+    for _, _, cid, label, area in due:
+        if len(picked) >= limit:
+            break
+        if per_area.get(area, 0) >= area_cap:
+            continue
+        per_area[area] = per_area.get(area, 0) + 1
+        picked.append((cid, label))
+    return picked
+
+
+def flash(conn: sqlite3.Connection, limit: int,
+          exclude: frozenset[str] = frozenset()) -> list[tuple[str, str]]:
+    """Return never-tested concepts at least FIRST_RECALL_DAYS old, oldest first.
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> flash(conn, 5)
+    []
+    """
+    if limit <= 0:
+        return []
+    rows = conn.execute(
         "SELECT id, label FROM concepts WHERE state='shaky' "
-        "ORDER BY cold_fails DESC, (last_cold IS NULL) DESC, last_cold ASC "
-        "LIMIT ?", (limit,)).fetchall()
-    return [(r[0], r[1]) for r in rows]
+        "AND cold_passes=0 AND cold_fails=0 AND intro_session <= ? "
+        "ORDER BY intro_session ASC, id ASC", (_eligible_cutoff(),)).fetchall()
+    return [(r[0], r[1]) for r in rows if r[0] not in exclude][:limit]
+
+
+def coverage(conn: sqlite3.Connection) -> list[tuple[str, str]]:
+    """Return one concept per topic with no cold recall in COVERAGE_DAYS days.
+
+    The pick is the topic's most at-risk eligible concept: a failed one first,
+    then the one untouched the longest (never tested counts from its intro).
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> coverage(conn)
+    []
+    """
+    recent = (datetime.now(timezone.utc) - timedelta(days=COVERAGE_DAYS)).isoformat()
+    rows = conn.execute(
+        "SELECT c.topic_id, c.id, c.label, c.cold_fails, "
+        "       COALESCE(c.last_cold, c.intro_session) AS touched "
+        "FROM concepts c WHERE c.state IN ('shaky','solid') AND c.intro_session <= ? "
+        "AND c.topic_id NOT IN (SELECT topic_id FROM concepts "
+        "                       WHERE last_cold IS NOT NULL AND last_cold >= ?) "
+        "ORDER BY c.topic_id, (c.cold_fails > 0 AND c.state='shaky') DESC, touched ASC",
+        (_eligible_cutoff(), recent)).fetchall()
+    picked: dict[str, tuple[str, str]] = {}
+    for topic, cid, label, _, _ in rows:
+        picked.setdefault(topic, (cid, label))
+    return list(picked.values())
+
+
+GAP_BUCKETS = ((0, 1, "<1"), (1, 4, "1-3"), (4, 11, "4-10"),
+               (11, 31, "11-30"), (31, 10**6, "30+"))
+
+
+def report(conn: sqlite3.Connection, days: int | None = 28) -> str:
+    """Return recall outcomes by gap since the previous recall and by area.
+
+    The gap of a first recall is counted from the day the concept was
+    introduced. It is the number the weekly check needs: does memory hold at
+    7, 21, 63 days, or is the schedule too long?
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> report(conn)
+    'NO-RECALLS'
+    """
+    rows = conn.execute(
+        "SELECT r.concept_id, r.ts, r.result, c.intro_session, t.area "
+        "FROM recalls r JOIN concepts c ON c.id = r.concept_id "
+        "JOIN topics t ON t.id = c.topic_id ORDER BY r.concept_id, r.ts").fetchall()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)) if days else None
+    gaps: dict[str, list[str]] = {}
+    areas: dict[str, list[str]] = {}
+    prev: dict[str, datetime] = {}
+    for cid, ts, result, intro, area in rows:
+        when = _parse_ts(ts)
+        start = prev.get(cid) or _parse_ts(intro + "T00:00:00+00:00")
+        prev[cid] = when
+        if cutoff and when < cutoff:
+            continue
+        gap = (when - start).total_seconds() / 86400
+        label = next(lab for lo, hi, lab in GAP_BUCKETS if lo <= gap < hi)
+        gaps.setdefault(label, []).append(result)
+        areas.setdefault(area, []).append(result)
+    if not gaps:
+        return "NO-RECALLS"
+
+    def rates(results: list[str]) -> str:
+        n = len(results)
+        return (f"n={n}\tpass={round(100 * results.count('pass') / n)}%"
+                f"\thint={round(100 * results.count('hint') / n)}%")
+
+    lines = [f"GAP\t{lab}\t{rates(gaps[lab])}" for _, _, lab in GAP_BUCKETS if lab in gaps]
+    lines += [f"AREA\t{a}\t{rates(r)}" for a, r in sorted(areas.items())]
+    lines.append(f"UNCOVERED\t{len(coverage(conn))}")
+    return "\n".join(lines)
+
+
+def balance(conn: sqlite3.Connection) -> tuple[int, int, int]:
+    """Return (backlog, new concepts of the previous session day, daily quota).
+
+    >>> conn = sqlite3.connect(":memory:")
+    >>> init_db(conn)
+    >>> balance(conn)
+    (0, 0, 0)
+    """
+    backlog = conn.execute(
+        "SELECT COUNT(*) FROM concepts WHERE state='shaky' "
+        "AND cold_passes=0 AND cold_fails=0").fetchone()[0]
+    new_last = conn.execute(
+        "SELECT COUNT(*) FROM concepts WHERE intro_session = "
+        "(SELECT MAX(intro_session) FROM concepts WHERE intro_session < ?)",
+        (today(),)).fetchone()[0]
+    return backlog, new_last, new_last + math.ceil(backlog / BACKLOG_DAYS)
 
 
 def record_misconception(conn: sqlite3.Connection, label: str,
@@ -429,7 +654,7 @@ def support_level(conn: sqlite3.Connection, topic_id: str) -> tuple[int, str]:
 
 
 def brief(conn: sqlite3.Connection, topic_id: str | None = None,
-          warm_limit: int = 2) -> str:
+          warm_limit: int = PRACTICE_MAX, quota: int | None = None) -> str:
     """Return everything the tutor should know before teaching, one tag per line.
 
     >>> conn = sqlite3.connect(":memory:")
@@ -438,16 +663,46 @@ def brief(conn: sqlite3.Connection, topic_id: str | None = None,
     'EMPTY'
     """
     lines: list[str] = []
-    topics = ([topic_id] if topic_id
-              else [row[0] for row in conn.execute(
-                  "SELECT id FROM topics ORDER BY area, id")])
+    # Review queue first: it decides which topics and bridges are worth showing.
+    # Coverage outranks everything, then practice, then flash fills the quota.
+    cover = coverage(conn)
+    taken = frozenset(cid for cid, _ in cover)
+    practice = warmup(conn, warm_limit, exclude=taken)
+    taken |= {cid for cid, _ in practice}
+    backlog, new_last, daily_quota = balance(conn)
+    if quota is not None:
+        daily_quota = quota
+    flashed = flash(conn, daily_quota - len(cover) - len(practice), exclude=taken)
+    queued = [cid for cid, _ in cover + practice + flashed]
+    if topic_id:
+        topics = [topic_id]
+    else:
+        # one SUPPORT line per topic in today's queue, not all 30+ topics
+        topics = sorted({row[0] for row in conn.execute(
+            f"SELECT topic_id FROM concepts WHERE id IN ({','.join('?' * len(queued))})",
+            queued)}) if queued else []
+        if not queued and not conn.execute("SELECT 1 FROM concepts").fetchone():
+            topics = [row[0] for row in conn.execute("SELECT id FROM topics ORDER BY area, id")]
     for tid in topics:
         level, reason = support_level(conn, tid)
         lines.append(f"SUPPORT\t{tid}\t{level}\t{reason}")
-    # warm-up targets are cross-topic by design: a shaky concept from any
-    # topic can be the highest-risk one to revisit at session start.
-    for cid, label in warmup(conn, warm_limit):
-        lines.append(f"WARMUP\t{cid}\t{label}")
+    sources = dict(conn.execute(
+        f"SELECT id, source FROM concepts WHERE source IS NOT NULL "
+        f"AND id IN ({','.join('?' * len(queued))})", queued)) if queued else {}
+
+    def tagged(tag: str, cid: str, label: str) -> str:
+        src = sources.get(cid)
+        return f"{tag}\t{cid}\t{label}" + (f"\t{src}" if src else "")
+
+    for cid, label in cover:
+        lines.append(tagged("COVER", cid, label))
+    for cid, label in practice:
+        lines.append(tagged("WARMUP", cid, label))
+    if backlog or queued or quota is not None:
+        lines.append(f"BALANCE\tbacklog={backlog}\tnew_last={new_last}"
+                     f"\tquota={daily_quota}\tuncovered={len(cover)}")
+    for cid, label in flashed:
+        lines.append(tagged("FLASH", cid, label))
     where = " AND (m.concept_id IS NULL OR c.topic_id=?)" if topic_id else ""
     params = (topic_id,) if topic_id else ()
     for label, stumbles in conn.execute(
@@ -455,11 +710,13 @@ def brief(conn: sqlite3.Connection, topic_id: str | None = None,
             "LEFT JOIN concepts c ON c.id = m.concept_id "
             f"WHERE m.resolved=0{where} ORDER BY m.stumbles DESC", params):
         lines.append(f"MISCONCEPTION\t{label}\t{stumbles}")
-    # bridges deliberately stay global: they connect concepts across areas,
-    # so scoping them to one topic would hide the cross-area link itself.
+    # Bridges stay cross-area (scoping them to one topic would hide the link),
+    # but only those touching today's queue: all 47 at once buried every signal.
+    queued_set = set(queued)
     for a_id, b_id, note in conn.execute(
             "SELECT a_id, b_id, note FROM links ORDER BY created_at"):
-        lines.append(f"BRIDGE\t{a_id}\t{b_id}\t{note}")
+        if a_id in queued_set or b_id in queued_set:
+            lines.append(f"BRIDGE\t{a_id}\t{b_id}\t{note}")
     deepen_where = " AND topic_id=?" if topic_id else ""
     # Oldest first and capped: unclosed notes accumulate for months (21 open
     # against 7 ever closed, 2026-09-20), so an uncapped list buries every other
@@ -685,9 +942,12 @@ def main(argv: list[str]) -> int:
     p_concept.add_argument("concept_id"); p_concept.add_argument("topic_id")
     p_concept.add_argument("label")
     p_concept.add_argument("--arc", type=int, default=None)
+    p_concept.add_argument("--source", default=None)
     p_cold = sub.add_parser("cold-result")
     p_cold.add_argument("concept_id")
-    p_cold.add_argument("result", choices=["pass", "fail"])
+    p_cold.add_argument("result", choices=["pass", "fail", "hint"])
+    p_report = sub.add_parser("report")
+    p_report.add_argument("--days", type=int, default=28)
     p_end = sub.add_parser("end-session")
     p_end.add_argument("--topics", default="")
     p_warm = sub.add_parser("warmup")
@@ -712,7 +972,8 @@ def main(argv: list[str]) -> int:
     p_floor.add_argument("level", choices=["0", "1", "2", "3", "clear"])
     p_brief = sub.add_parser("brief")
     p_brief.add_argument("--topic", default=None)
-    p_brief.add_argument("--limit", type=int, default=2)
+    p_brief.add_argument("--limit", type=int, default=PRACTICE_MAX)
+    p_brief.add_argument("--quota", type=int, default=None)
     p_chal = sub.add_parser("challenge")
     p_chal.add_argument("--days", type=int, default=10)
     p_chal.add_argument("--min-solid", type=int, default=2)
@@ -742,7 +1003,7 @@ def main(argv: list[str]) -> int:
         if args.cmd == "record-topic":
             record_topic(conn, args.topic_id, args.area); return 0
         if args.cmd == "record-concept":
-            record_concept(conn, args.concept_id, args.topic_id, args.label)
+            record_concept(conn, args.concept_id, args.topic_id, args.label, args.source)
             if args.arc is not None:
                 conn.execute(
                     "INSERT OR IGNORE INTO arc_concepts (arc_id, concept_id) "
@@ -750,7 +1011,10 @@ def main(argv: list[str]) -> int:
                 conn.commit()
             return 0
         if args.cmd == "cold-result":
-            print(cold_result(conn, args.concept_id, args.result == "pass")); return 0
+            print(cold_result(conn, args.concept_id, args.result == "pass",
+                              hint=args.result == "hint")); return 0
+        if args.cmd == "report":
+            print(report(conn, args.days)); return 0
         if args.cmd == "end-session":
             end_session(conn, args.topics); return 0
         if args.cmd == "warmup":
@@ -781,7 +1045,7 @@ def main(argv: list[str]) -> int:
                               None if args.level == "clear" else int(args.level))
             return 0
         if args.cmd == "brief":
-            print(brief(conn, args.topic, args.limit))
+            print(brief(conn, args.topic, args.limit, args.quota))
             return 0
         if args.cmd == "challenge":
             for tid, solid, bridges in challenge_candidates(

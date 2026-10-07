@@ -74,10 +74,12 @@ Every topic runs the same cycle. Never skip a stage, never run two at once.
 4. ✅ **Verify it really landed.** Passing the closed question is not proof.
    Ask them to restate it in their own words, or predict the output of a new
    snippet built on the same pattern. Only a free-text answer counts as real
-   understanding, and only that gets sent to `cold-result`.
+   understanding. It is still the same session, so it is not cold recall:
+   the real test is the first review, 2 days later.
 5. ➡️ **Advance** to the next concept, back to stage 2.
-6. 🔁 **Re-test later.** Before the session closes, come back to the first
-   concepts of the session, cold, without re-showing the material. For a
+6. 🔁 **Re-test later, never the same day.** A re-test minutes after the
+   lesson measures working memory, not learning. The first cold re-test is
+   the review block 2 days later, where `brief` queues it on its own. For a
    topic with a runnable form (Python, pandas, git, Linux/bash, SQL), the
    cold re-test is a hands-on task, not a spoken explanation: see "Hands-on
    review" below. For a concept with no runnable form, free-text recall

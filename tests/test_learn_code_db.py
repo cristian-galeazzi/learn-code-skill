@@ -85,10 +85,10 @@ def test_state_machine_promotion_and_regression(tmp_path):
     assert lc.cold_result(conn, "t/c", False) == "shaky"
     # shaky + fail -> stays shaky (one of the four EXACT transitions)
     assert lc.cold_result(conn, "t/c", False) == "shaky"
-    # counters: 2 passes, 2 fails
+    # counters: the same-session pass is not cold, so 1 pass, 2 fails
     p, f = conn.execute("SELECT cold_passes, cold_fails FROM concepts "
                         "WHERE id='t/c'").fetchone()
-    assert (p, f) == (2, 2)
+    assert (p, f) == (1, 2)
 
 
 def test_cold_result_unknown_concept_raises(tmp_path):
@@ -111,8 +111,9 @@ def test_warmup_and_misconception(tmp_path):
     conn = sqlite3.connect(db)
     lc.end_session(conn, "t")                 # both -> shaky
     lc.cold_result(conn, "t/a", False)        # a fails once -> more at risk
-    top = lc.warmup(conn, limit=1)
-    assert top == [("t/a", "a")]
+    assert lc.warmup(conn, limit=1) == []     # retested from tomorrow, not now
+    conn.execute("UPDATE concepts SET last_cold=? WHERE id='t/a'", (_days_ago(2),))
+    assert lc.warmup(conn, limit=1) == [("t/a", "a")]
 
     lc.record_misconception(conn, "mutate-vs-rebind", "t/a")
     lc.record_misconception(conn, "mutate-vs-rebind", "t/a")
@@ -316,10 +317,12 @@ def test_brief_reports_every_channel(tmp_path):
     lc.main(["--db", db, "to-deepen", "python.dicts", "comprehensions"])
     conn = sqlite3.connect(db)
     lc.init_db(conn)
+    conn.execute("UPDATE concepts SET intro_session='2026-01-01'")  # 2+ days old
     out = lc.brief(conn, "python.dicts")
     lines = out.split("\n")
     assert "SUPPORT\tpython.dicts\t3\t0/1 solid" in lines
-    assert "WARMUP\tpython.dicts/setdefault\tsetdefault" in out
+    # never cold-tested and its topic never covered: the coverage rule takes it
+    assert "COVER\tpython.dicts/setdefault\tsetdefault" in out
     assert "MISCONCEPTION\tdict copy is deep\t1" in out
     assert "BRIDGE\tpython.dicts/setdefault\tsql.joins/hash-join\t" in out
     assert "DEEPEN\tpython.dicts\tcomprehensions" in lines
@@ -339,7 +342,7 @@ def test_brief_includes_topic_with_no_concepts(tmp_path):
     lc.main(["--db", db, "record-topic", "python.generators", "python"])
     conn = sqlite3.connect(db)
     lc.init_db(conn)
-    out = lc.brief(conn)
+    out = lc.brief(conn, "python.generators")
     assert "SUPPORT\tpython.generators\t3\tnew topic" in out.split("\n")
 
 
@@ -601,3 +604,218 @@ def test_brief_caps_deepen_at_the_three_oldest(tmp_path):
     assert len(deepen) == 3, "brief must cap DEEPEN, or it grows without bound"
     assert "note0" in deepen[0], "the oldest note comes first: stale items must surface"
     assert not any("note5" in l for l in deepen), "the newest note is not the urgent one"
+
+
+# --- spaced recall: solid concepts come back, the backlog drains -------------
+
+def _days_ago(n: float) -> str:
+    """ISO timestamp n days in the past, in the format cold_result writes.
+
+    >>> _days_ago(0) <= lc.now()
+    True
+    """
+    return (lc.datetime.now(lc.timezone.utc) - lc.timedelta(days=n)).isoformat()
+
+
+def _concept(conn, cid, area="python", state="shaky", passes=0, fails=0,
+             last_cold=None, intro="2026-01-01"):
+    topic = cid.split("/")[0]
+    conn.execute("INSERT OR IGNORE INTO topics (id,area,created_at,updated_at) "
+                 "VALUES (?,?,'x','x')", (topic, area))
+    conn.execute("INSERT INTO concepts (id,topic_id,label,state,intro_session,"
+                 "last_seen,cold_passes,cold_fails,last_cold) "
+                 "VALUES (?,?,?,?,?,'x',?,?,?)",
+                 (cid, topic, cid, state, intro, passes, fails, last_cold))
+
+
+def _mem_db():
+    conn = sqlite3.connect(":memory:")
+    lc.init_db(conn)
+    return conn
+
+
+def test_recall_interval_grows_geometrically_and_fails_shorten_it():
+    assert lc.recall_interval_days(1, 0) == 7
+    assert lc.recall_interval_days(2, 0) == 21
+    assert lc.recall_interval_days(3, 0) == 63
+    assert lc.recall_interval_days(3, 2) == 7     # linspace: 1 net pass
+    assert lc.recall_interval_days(0, 3) == 7     # never below the base
+
+
+def test_solid_concept_returns_once_its_interval_elapsed():
+    conn = _mem_db()
+    _concept(conn, "np/due", state="solid", passes=1, last_cold=_days_ago(8))
+    _concept(conn, "np/fresh", state="solid", passes=1, last_cold=_days_ago(6))
+    ids = [cid for cid, _ in lc.warmup(conn, limit=10)]
+    assert ids == ["np/due"]
+
+
+def test_warmup_skips_never_tested_and_caps_each_area():
+    conn = _mem_db()
+    for i in range(5):
+        _concept(conn, f"py/c{i}", area="python", fails=1, last_cold=_days_ago(i + 1))
+    for i in range(2):
+        _concept(conn, f"git/c{i}", area="git", fails=1, last_cold=_days_ago(i + 1))
+    _concept(conn, "py/untested")
+    ids = [cid for cid, _ in lc.warmup(conn, limit=10, area_cap=3)]
+    assert sum(c.startswith("py/") for c in ids) == 3
+    assert sum(c.startswith("git/") for c in ids) == 2
+    assert "py/untested" not in ids
+
+
+def test_warmup_puts_the_most_overdue_first():
+    conn = _mem_db()
+    _concept(conn, "a/recent", fails=1, last_cold=_days_ago(1.5))
+    _concept(conn, "a/old", fails=1, last_cold=_days_ago(30))
+    _concept(conn, "a/solid", state="solid", passes=1, last_cold=_days_ago(17))  # 10 days overdue
+    ids = [cid for cid, _ in lc.warmup(conn, limit=10)]
+    assert ids == ["a/old", "a/recent", "a/solid"]   # failed first, then overdue
+
+
+def test_flash_lists_never_tested_concepts_oldest_first():
+    conn = _mem_db()
+    _concept(conn, "a/new", intro="2026-09-30")
+    _concept(conn, "a/old", intro="2026-09-01")
+    _concept(conn, "a/tested", fails=1, last_cold=_days_ago(1))
+    _concept(conn, "a/live", state="learning")
+    assert [cid for cid, _ in lc.flash(conn, limit=10)] == ["a/old", "a/new"]
+
+
+def test_balance_quota_is_new_concepts_plus_a_seventh_of_the_backlog():
+    conn = _mem_db()
+    for i in range(11):
+        _concept(conn, f"a/old{i}", intro="2026-09-01")
+    yesterday = (lc.datetime.now(lc.timezone.utc).date() - lc.timedelta(days=1)).isoformat()
+    for i in range(4):
+        _concept(conn, f"a/y{i}", intro=yesterday)        # also never tested
+    backlog, new_last, quota = lc.balance(conn)
+    assert (backlog, new_last) == (15, 4)
+    assert quota == 4 + 3                                  # ceil(15 / 7) == 3
+
+
+def test_brief_fills_the_quota_with_flash_after_the_practice_lane():
+    conn = _mem_db()
+    for i in range(14):
+        _concept(conn, f"a/b{i}", intro="2026-09-01")      # backlog 14
+    # the latest session day introduced one concept, already tested once
+    _concept(conn, "a/shaky", fails=1, last_cold=_days_ago(2), intro="2026-09-02")
+    lines = lc.brief(conn).split("\n")
+    assert "BALANCE\tbacklog=14\tnew_last=1\tquota=3\tuncovered=0" in lines
+    assert sum(l.startswith("WARMUP\t") for l in lines) == 1
+    assert sum(l.startswith("FLASH\t") for l in lines) == 2
+
+
+def test_brief_quota_override_drives_an_extra_review_session():
+    conn = _mem_db()
+    for i in range(20):
+        _concept(conn, f"a/b{i}", intro="2026-09-01")
+    lines = lc.brief(conn, quota=15).split("\n")
+    assert sum(l.startswith("COVER\t") for l in lines) == 1   # topic a never recalled
+    assert sum(l.startswith("FLASH\t") for l in lines) == 14
+    assert any(l.startswith("BALANCE\t") and "quota=15" in l for l in lines)
+
+
+def test_hot_check_in_the_same_session_does_not_count(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "t", "python"])
+    lc.main(["--db", db, "record-concept", "t/c", "t", "c"])
+    conn = sqlite3.connect(db)
+    assert lc.cold_result(conn, "t/c", True) == "learning"
+    row = conn.execute("SELECT cold_passes, cold_fails, last_cold FROM concepts").fetchone()
+    assert row == (0, 0, None)
+
+
+def test_new_concept_waits_two_days_before_its_first_recall():
+    conn = _mem_db()
+    today = lc.datetime.now(lc.timezone.utc).date()
+    _concept(conn, "a/yesterday", intro=(today - lc.timedelta(days=1)).isoformat())
+    _concept(conn, "a/three", intro=(today - lc.timedelta(days=3)).isoformat())
+    assert [cid for cid, _ in lc.flash(conn, 10)] == ["a/three"]
+
+
+def test_coverage_forces_one_concept_from_each_stale_topic():
+    conn = _mem_db()
+    for i in range(3):
+        _concept(conn, f"stale/c{i}", area="git")
+    _concept(conn, "fresh/c0", area="git", fails=1, last_cold=_days_ago(2))
+    _concept(conn, "quiet/c0", area="git", state="solid", passes=3,
+             last_cold=_days_ago(9))                  # not due (63 days) but stale
+    cover = dict(lc.coverage(conn))
+    assert set(cover) == {"stale/c0", "quiet/c0"}
+
+
+def test_brief_trims_support_and_bridges_to_the_queue():
+    conn = _mem_db()
+    _concept(conn, "a/x", fails=1, last_cold=_days_ago(2))
+    _concept(conn, "b/y", fails=1, last_cold=_days_ago(2))
+    _concept(conn, "c/z", state="solid", passes=3, last_cold=_days_ago(1))
+    _concept(conn, "d/w", state="solid", passes=3, last_cold=_days_ago(1))
+    conn.execute("INSERT INTO links (a_id,b_id,note,created_at) VALUES ('a/x','c/z','n1','x')")
+    conn.execute("INSERT INTO links (a_id,b_id,note,created_at) VALUES ('c/z','d/w','n2','x')")
+    lines = lc.brief(conn).split("\n")
+    support = {l.split("\t")[1] for l in lines if l.startswith("SUPPORT\t")}
+    assert support == {"a", "b"}
+    assert sum(l.startswith("BRIDGE\t") for l in lines) == 1
+
+
+# --- recall history, sources, recalls with a hint -----------------------------
+
+def test_cold_result_logs_real_recalls_and_skips_hot_checks(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "t", "python"])
+    lc.main(["--db", db, "record-concept", "t/c", "t", "c"])
+    conn = sqlite3.connect(db)
+    lc.cold_result(conn, "t/c", True)                 # same session: not logged
+    assert conn.execute("SELECT COUNT(*) FROM recalls").fetchone()[0] == 0
+    lc.end_session(conn, "t")
+    lc.cold_result(conn, "t/c", True)
+    assert conn.execute("SELECT concept_id, result FROM recalls").fetchall() == [("t/c", "pass")]
+
+
+def test_hint_counts_as_fail_but_is_logged_apart(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    conn = sqlite3.connect(db)
+    _concept(conn, "t/c", state="solid", passes=2, last_cold=_days_ago(30))
+    conn.commit()
+    assert lc.main(["--db", db, "cold-result", "t/c", "hint"]) == 0
+    row = conn.execute("SELECT state, cold_passes, cold_fails FROM concepts").fetchone()
+    assert row == ("shaky", 2, 1)
+    assert conn.execute("SELECT result FROM recalls").fetchone()[0] == "hint"
+
+
+def test_record_concept_keeps_its_source_and_brief_prints_it(tmp_path):
+    db = str(tmp_path / "state.db")
+    lc.main(["--db", db, "init"])
+    lc.main(["--db", db, "record-topic", "np", "python"])
+    lc.main(["--db", db, "record-concept", "np/axis", "np", "axis collapses",
+             "--source", "Python Data Science Handbook p.87"])
+    conn = sqlite3.connect(db)
+    conn.execute("UPDATE concepts SET state='shaky', intro_session='2026-01-01'")
+    conn.commit()
+    assert ("COVER\tnp/axis\taxis collapses\tPython Data Science Handbook p.87"
+            in lc.brief(conn).split("\n"))
+
+
+def test_migrate_adds_source_to_an_old_db():
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(lc.SCHEMA.replace("    last_seen TEXT NOT NULL, last_cold TEXT,\n    source TEXT);",
+                                         "    last_seen TEXT NOT NULL, last_cold TEXT);"))
+    assert "source" not in {r[1] for r in conn.execute("PRAGMA table_info(concepts)")}
+    lc.migrate(conn)
+    assert "source" in {r[1] for r in conn.execute("PRAGMA table_info(concepts)")}
+
+
+def test_report_gives_pass_rate_by_gap_since_the_previous_recall():
+    conn = _mem_db()
+    _concept(conn, "a/x", intro="2026-09-01")
+    rows = [("a/x", "2026-09-03T10:00:00+00:00", "pass"),   # 2 days after intro
+            ("a/x", "2026-09-10T10:00:00+00:00", "fail"),   # 7 days later
+            ("a/x", "2026-09-11T10:00:00+00:00", "hint")]   # 1 day later
+    conn.executemany("INSERT INTO recalls (concept_id, ts, result) VALUES (?,?,?)", rows)
+    out = lc.report(conn, days=None).split("\n")
+    assert "GAP\t1-3\tn=2\tpass=50%\thint=50%" in out
+    assert "GAP\t4-10\tn=1\tpass=0%\thint=0%" in out
+    assert "AREA\tpython\tn=3\tpass=33%\thint=33%" in out
