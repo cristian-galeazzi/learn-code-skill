@@ -2,12 +2,18 @@
   "name": "learn-code",
   "displayName": "learn-code",
   "version": "1.0.0",
-  "description": "A tutor skill that teaches programming and the math behind it without doing your homework, then keeps what you learned alive with spaced, cold recall.",
+  "description": "A tutor for Claude Code that teaches programming and the math behind it without doing your homework, then keeps what you learned alive with spaced, cold recall.",
   "author": {
     "name": "Cristian Galeazzi",
     "url": "https://github.com/cristian-galeazzi"
   },
   "repository": "https://github.com/cristian-galeazzi/learn-code-skill",
   "license": "MIT",
-  "keywords": ["learning", "tutor", "spaced-repetition", "education", "programming"]
+  "keywords": [
+    "learning",
+    "tutor",
+    "spaced-repetition",
+    "education",
+    "programming"
+  ]
 }

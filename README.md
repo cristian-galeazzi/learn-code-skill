@@ -308,7 +308,9 @@ The full list is in `--help`.
 
 ## Requirements
 
-- Claude Code
+- Claude Code (terminal, IDE extensions, or the desktop app's Code tab). The tutor
+  runs a small local script and keeps its database on your machine, so it needs
+  Claude Code: it does not work in claude.ai chat.
 - Python 3.9+ (standard library only, no runtime dependencies)
 - `sqlite3` (bundled with Python)
 
