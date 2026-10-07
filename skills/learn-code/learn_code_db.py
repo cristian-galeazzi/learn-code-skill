@@ -20,16 +20,15 @@ COLD_DECAY_DAYS = 10
 # How many unclosed to-deepen notes brief shows. The rest live in growth-map.md.
 DEEPEN_SHOWN = 3
 
-# Spaced recall (2026-10-07). A solid concept used to stay solid forever, so it
-# was never asked again and quietly faded (linspace: solid on 09-25, forgotten by
-# 10-06). Now it comes back after RECALL_BASE_DAYS * RECALL_GROWTH**(net - 1)
-# days, net = passes - fails. No cap on purpose: a capped interval makes every
+# Spaced recall. A solid concept used to stay solid forever, so it was never
+# asked again and quietly faded within a couple of weeks. Now it comes back
+# after RECALL_BASE_DAYS * RECALL_GROWTH**(net - 1) days, net = passes - fails. No cap on purpose: a capped interval makes every
 # solid concept return forever, and daily load would grow with the whole DB.
 RECALL_BASE_DAYS = 7
 RECALL_GROWTH = 3
 # Practice lane size and per-area cap: 10 hands-on items per Hands block, and no
-# area may take more than 3 of them, so a topic with many fails (stats) cannot
-# crowd out the others.
+# area may take more than 3 of them, so a topic with many fails cannot crowd
+# out the others.
 PRACTICE_MAX = 10
 AREA_CAP = 3
 # Never-tested backlog must drain faster than new concepts arrive: the daily
@@ -41,8 +40,8 @@ BACKLOG_DAYS = 7
 FIRST_RECALL_DAYS = 2
 FAIL_RETEST_DAYS = 1
 # Coverage outranks every other rule: a topic with no cold recall in this many
-# days gets one concept in today's queue, whatever its due dates say. Weeks
-# without touching studied material (20 days in Sept-Oct 2026) must not recur.
+# days gets one concept in today's queue, whatever its due dates say: studied
+# material must never sit untouched for weeks.
 COVERAGE_DAYS = 7
 
 SCHEMA = """
@@ -190,8 +189,9 @@ def record_concept(conn: sqlite3.Connection, concept_id: str,
                    topic_id: str, label: str, source: str | None = None) -> None:
     """Insert a concept as 'learning' if new, else touch last_seen.
 
-    `source` is where it was learned (book and page, course section, official
-    docs), so review can reopen the real page instead of recalling from memory.
+    `source` is where it was learned (a docs page, a course lesson, a chapter,
+    the learner's own notes), so review can reopen the real material instead of
+    rebuilding it from memory.
 
     >>> conn = sqlite3.connect(":memory:")  # doctest: +SKIP
     >>> init_db(conn)  # doctest: +SKIP

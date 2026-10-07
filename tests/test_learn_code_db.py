@@ -638,7 +638,7 @@ def test_recall_interval_grows_geometrically_and_fails_shorten_it():
     assert lc.recall_interval_days(1, 0) == 7
     assert lc.recall_interval_days(2, 0) == 21
     assert lc.recall_interval_days(3, 0) == 63
-    assert lc.recall_interval_days(3, 2) == 7     # linspace: 1 net pass
+    assert lc.recall_interval_days(3, 2) == 7     # 1 net pass
     assert lc.recall_interval_days(0, 3) == 7     # never below the base
 
 
@@ -791,11 +791,11 @@ def test_record_concept_keeps_its_source_and_brief_prints_it(tmp_path):
     lc.main(["--db", db, "init"])
     lc.main(["--db", db, "record-topic", "np", "python"])
     lc.main(["--db", db, "record-concept", "np/axis", "np", "axis collapses",
-             "--source", "Python Data Science Handbook p.87"])
+             "--source", "numpy docs, numpy.sum"])
     conn = sqlite3.connect(db)
     conn.execute("UPDATE concepts SET state='shaky', intro_session='2026-01-01'")
     conn.commit()
-    assert ("COVER\tnp/axis\taxis collapses\tPython Data Science Handbook p.87"
+    assert ("COVER\tnp/axis\taxis collapses\tnumpy docs, numpy.sum"
             in lc.brief(conn).split("\n"))
 
 
@@ -819,3 +819,27 @@ def test_report_gives_pass_rate_by_gap_since_the_previous_recall():
     assert "GAP\t1-3\tn=2\tpass=50%\thint=50%" in out
     assert "GAP\t4-10\tn=1\tpass=0%\thint=0%" in out
     assert "AREA\tpython\tn=3\tpass=33%\thint=33%" in out
+
+
+# --- privacy: nothing personal may ever be tracked ----------------------------
+
+PRIVATE_PATTERNS = (
+    re.compile(r"(^|/)[^/]*\.db($|[-.])"),     # state.db, state.db-journal, backups
+    re.compile(r"(^|/)plan\.md$"),             # the learner's plan (the template is plan-template.md)
+    re.compile(r"(^|/)growth-map\.md$"),
+    re.compile(r"(^|/)CLAUDE\.md$"),           # maintainer's local instructions
+    re.compile(r"^docs/"),                     # internal design notes
+    re.compile(r"(^|/)\.superpowers/"),
+    re.compile(r"(^|/)\.claude/"),
+    re.compile(r"(^|/)sources/"),              # learners' own study material
+)
+
+
+def test_no_private_file_is_tracked():
+    repo = Path(__file__).resolve().parent.parent
+    if not (repo / ".git").exists():
+        pytest.skip("not a git checkout")
+    tracked = subprocess.run(["git", "ls-files"], cwd=repo, capture_output=True,
+                             text=True, check=True).stdout.split()
+    leaked = [f for f in tracked if any(p.search(f) for p in PRIVATE_PATTERNS)]
+    assert not leaked, f"private files are tracked: {leaked}"

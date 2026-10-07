@@ -126,8 +126,13 @@ after them.
    the warm-up, the open arc and the theses due for cold recall.
    `reference/tracking.md` says what each tag means.
 2. `~/.claude/learn-code/plan.md`, if it exists. It says where the learner is
-   going, which is what a block points at. If it is absent, point at the next
-   concept instead and never mention the file.
+   going, which is what a block points at.
+
+**First run.** When `brief` returns `EMPTY` and there is no plan file, the
+learner is new: run the short setup in `reference/onboarding.md` (seven
+mostly one-click questions, all skippable), then teach. It happens once. If
+they skip it, point at the next concept instead of a plan and never bring the
+setup up again.
 
 ## Always
 
@@ -179,6 +184,7 @@ Load a file when its moment arrives. Never all of them at once.
 - `reference/tracking.md` - the database CLI, the brief tags, what gets logged
 - `reference/format.md` - emoji table, prose conventions, code examples, session
 - `reference/plan-template.md` - the optional roadmap file, and what reads it
+- `reference/onboarding.md` - the first-run setup for a new learner
 
 ## Boundaries
 

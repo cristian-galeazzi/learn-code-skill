@@ -10,8 +10,10 @@ Loaded from `SKILL.md`.
 
 Persistent mastery lives in a SQLite DB at `~/.claude/learn-code/state.db`,
 driven by the CLI shipped next to this file. Call it via Bash:
-`python3 ~/.claude/skills/learn-code/learn_code_db.py <subcommand>`. The database
-is created on first use. The user never sees the plumbing, never sees the
+`python3 <skill base directory>/learn_code_db.py <subcommand>`, where the base
+directory is the folder holding this skill's `SKILL.md` (Claude Code shows it
+when the skill loads; it differs between a plugin install and a manual one).
+The database is created on first use. The user never sees the plumbing, never sees the
 commands, never sees the tags.
 
 Concepts are two-level: a dotted topic id (`python.dictionaries`) and atomic
@@ -52,9 +54,10 @@ test it as one: split it on the spot with `record-concept` into atomic ids
 under the same topic, test one, and leave the rest for the queue.
 
 **Where it came from.** Every new concept gets `record-concept ... --source
-"<book> p.<n>"` (or the course section, or the official docs page). `brief`
-prints the source as a fourth field, and review reopens that page for volume
-work instead of improvising material.
+"<where it was learned>"`: whatever the learner studies from, such as an
+official docs page, a course lesson, a chapter, or their own notes. `brief`
+prints the source as a fourth field, and review reopens that material for
+volume work instead of improvising it.
 
 **A recall with a nudge.** If the learner needed a hint to get there, log
 `cold-result <id> hint`: it moves the state like a fail, and the history keeps
@@ -136,11 +139,12 @@ Three sections: `Now`, `Next`, `Not now`. The last one is the one that earns
 its keep: it lists what was deliberately ruled out and why, so a suggestion
 already rejected is not offered again.
 
-**Never ask the learner to create this file.** A missing plan is a supported
-state, not a problem to report: point at the next concept instead of a
-milestone and say nothing about plans. No wizard, no warning, no first-run
-prompt. `reference/plan-template.md` is the shape, for a learner who goes
-looking.
+**The learner never writes this file by hand.** The first-run setup
+(`reference/onboarding.md`) creates it from a few one-click answers, and the
+tutor updates it whenever the learner changes course. A missing plan is still a
+supported state: when the learner skipped the setup, point at the next concept
+instead of a milestone and do not ask again. `reference/plan-template.md` is
+the shape.
 
 ## Weekly and monthly
 
@@ -151,13 +155,13 @@ looking.
   too long.
 - **Mixed challenge, once a week** (the optional Saturday session): one task
   that needs 2-3 areas at once, for example numpy plus pandas plus a shell
-  step, built from examples in the learner's books on concepts already
+  step, built from examples in the learner's own sources on concepts already
   reviewed at least once. The learner picks the tools; log a `cold-result` for
   each concept it exercised. It trains choosing the tool, which single-concept
   recall never does.
-- **End of every new chapter**: before the session closes, record its 3-6 key
-  concepts with `--source`. When the learner studied a chapter alone (book or
-  LM Notebook), they name the chapter and pages, and the tutor records the
-  concepts from those pages: what is not in the database never comes back.
+- **End of every new unit** (a chapter, a lesson, a docs section): before the
+  session closes, record its 3-6 key concepts with `--source`. When the learner
+  studied a unit on their own, they name it, and the tutor records its key
+  concepts from that material: what is not in the database never comes back.
 - **First Sunday of the month**: close or delete stale `DEEPEN` notes and
   misconceptions that have not recurred, so `brief` keeps showing signal.

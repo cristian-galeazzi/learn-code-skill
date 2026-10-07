@@ -17,3 +17,7 @@ docs/
 
 # project working notes for Claude, local only
 CLAUDE.md
+plan.md
+sources/
+*.db-*
+*.db.bak*

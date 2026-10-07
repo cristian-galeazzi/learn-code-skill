@@ -1,0 +1,15 @@
+{
+  "name": "learn-code-skill",
+  "description": "The learn-code tutor plugin",
+  "owner": {
+    "name": "Cristian Galeazzi",
+    "url": "https://github.com/cristian-galeazzi"
+  },
+  "plugins": [
+    {
+      "name": "learn-code",
+      "source": "./",
+      "description": "A tutor that teaches without doing your homework, then keeps what you learned alive with spaced, cold recall."
+    }
+  ]
+}
